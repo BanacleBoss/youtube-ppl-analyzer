@@ -216,6 +216,27 @@ export default function YouTubeAnalyzer() {
     return { avgViews: Math.round(avgViews), engagement: (engagement * 100).toFixed(2), expectedRevenue: Math.round(expectedRevenue), commission: Math.round(commission), netProfit: Math.round(netProfit), roi: parseFloat(roi), roas: parseFloat(roas), riskLevel };
   };
 
+  const calculateViewTrend = (videos) => {
+    const sorted = [...(videos || [])].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
+    const recent = sorted.slice(0, 10);
+    const prev = sorted.slice(10, 20);
+    if (recent.length === 0) return null;
+    const recentAvg = recent.reduce((s, v) => s + (v.views || 0), 0) / recent.length;
+    const prevAvg = prev.length > 0 ? prev.reduce((s, v) => s + (v.views || 0), 0) / prev.length : null;
+    const change = prevAvg ? ((recentAvg - prevAvg) / prevAvg * 100) : null;
+    const chartData = sorted.slice(0, 20).reverse().map((v, i) => ({
+      name: `${i + 1}`,
+      views: v.views || 0,
+      title: v.title
+    }));
+    return {
+      recentAvg: Math.round(recentAvg),
+      prevAvg: prevAvg ? Math.round(prevAvg) : null,
+      change: change !== null ? parseFloat(change.toFixed(1)) : null,
+      chartData
+    };
+  };
+
   const getSortedVideos = (videos) => {
     const sorted = [...(videos || [])].sort((a, b) => {
       let aVal, bVal;
@@ -435,6 +456,55 @@ export default function YouTubeAnalyzer() {
                         위험도: {pplData.riskLevel} {pplData.riskLevel === '낮음' ? '✅ 강추' : pplData.riskLevel === '중간' ? '⚠️ 검토' : '❌ 신중'}
                       </div>
                     </div>
+
+                    {/* 조회수 트렌드 섹션 */}
+                    {(() => {
+                      const trend = calculateViewTrend(longformVideos);
+                      if (!trend) return null;
+                      const isUp = trend.change !== null && trend.change > 0;
+                      const isDown = trend.change !== null && trend.change < 0;
+                      const trendColor = isUp ? 'text-green-400' : isDown ? 'text-red-400' : 'text-slate-400';
+                      const trendBg = isUp ? 'bg-green-900 border-green-700' : isDown ? 'bg-red-900 border-red-700' : 'bg-slate-700 border-slate-600';
+                      return (
+                        <div className="bg-slate-700 border border-slate-600 rounded-lg p-5 mt-4">
+                          <h3 className="text-lg font-bold text-white mb-3">📊 조회수 트렌드 분석</h3>
+                          <p className="text-xs text-slate-400 mb-4">롱폼 기준 최근 10개 vs 이전 10개 평균 조회수 비교</p>
+                          <div className="grid grid-cols-3 gap-3 mb-4">
+                            <div className="bg-slate-800 rounded p-3 text-center">
+                              <p className="text-slate-400 text-xs mb-1">최근 10개 평균</p>
+                              <p className="text-xl font-bold text-white">{(trend.recentAvg / 1000).toFixed(1)}K</p>
+                            </div>
+                            <div className="bg-slate-800 rounded p-3 text-center">
+                              <p className="text-slate-400 text-xs mb-1">이전 10개 평균</p>
+                              <p className="text-xl font-bold text-slate-300">{trend.prevAvg ? (trend.prevAvg / 1000).toFixed(1) + 'K' : '-'}</p>
+                            </div>
+                            <div className={`rounded p-3 text-center border ${trendBg}`}>
+                              <p className="text-slate-400 text-xs mb-1">변화율</p>
+                              <p className={`text-xl font-bold flex items-center justify-center gap-1 ${trendColor}`}>
+                                {trend.change !== null ? (
+                                  <>{isUp ? <ArrowUp size={18} /> : isDown ? <ArrowDown size={18} /> : null}{Math.abs(trend.change)}%</>
+                                ) : '-'}
+                              </p>
+                            </div>
+                          </div>
+                          {trend.chartData.length > 0 && (
+                            <ResponsiveContainer width="100%" height={160}>
+                              <LineChart data={trend.chartData}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#475569" />
+                                <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 11 }} label={{ value: '영상 순서 (오래된→최근)', position: 'insideBottom', offset: -2, fill: '#64748b', fontSize: 10 }} />
+                                <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={v => v >= 1000 ? (v/1000).toFixed(0)+'K' : v} />
+                                <Tooltip
+                                  contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', color: '#e2e8f0', fontSize: 12 }}
+                                  formatter={(value) => [(value/1000).toFixed(1) + 'K 조회', '조회수']}
+                                  labelFormatter={(label, payload) => payload?.[0]?.payload?.title?.slice(0, 30) || `영상 ${label}`}
+                                />
+                                <Line type="monotone" dataKey="views" stroke="#3b82f6" strokeWidth={2} dot={{ fill: '#3b82f6', r: 3 }} activeDot={{ r: 5 }} />
+                              </LineChart>
+                            </ResponsiveContainer>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* 댓글 분석 섹션 */}
                     <div className="bg-slate-700 border border-slate-600 rounded-lg p-5 mt-4">
