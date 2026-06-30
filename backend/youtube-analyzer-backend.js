@@ -43,6 +43,9 @@ const channelSchema = new mongoose.Schema({
     uploadDate: Date,
     duration: Number,
     engagement: Number,
+    tags: [String],
+    categoryId: String,
+    definition: String,
     collectedAt: { type: Date, default: Date.now }
   }],
   
@@ -53,6 +56,20 @@ const channelSchema = new mongoose.Schema({
     predictedRevenue: Number
   }],
   
+  country: String,
+  channelKeywords: [String],
+  channelPublishedAt: Date,
+  videoCount: Number,
+  commentAnalysis: {
+    lastAnalyzed: Date,
+    totalCommentsFetched: Number,
+    purchaseIntentRatio: Number,   // 구매의도 댓글 비율
+    avgCommentLength: Number,       // 평균 댓글 길이
+    replyRatio: Number,             // 답글 있는 댓글 비율
+    negativeRatio: Number,          // 부정 키워드 비율
+    qualityScore: Number,           // 댓글 품질 점수 0-100
+    topPurchaseComments: [String],  // 구매의도 댓글 예시
+  },
   lastUpdated: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now }
 });
@@ -91,7 +108,7 @@ class YouTubeAnalyzer {
 
       const response = await axios.get(`${this.baseURL}/channels`, {
         params: {
-          part: 'statistics,snippet',
+          part: 'statistics,snippet,brandingSettings',
           id: channelId_real,
           key: this.apiKey
         }
@@ -102,11 +119,16 @@ class YouTubeAnalyzer {
       }
 
       const channel = response.data.items[0];
+      const keywordsRaw = channel.brandingSettings?.channel?.keywords || '';
       return {
         channelId: channel.id,
         channelName: channel.snippet.title,
         subscribers: parseInt(channel.statistics.subscriberCount || 0),
-        totalViews: parseInt(channel.statistics.viewCount || 0)
+        totalViews: parseInt(channel.statistics.viewCount || 0),
+        country: channel.snippet.country || '',
+        channelKeywords: keywordsRaw ? keywordsRaw.match(/"[^"]+"|[^\s]+/g)?.map(k => k.replace(/"/g,'')) || [] : [],
+        channelPublishedAt: new Date(channel.snippet.publishedAt),
+        videoCount: parseInt(channel.statistics.videoCount || 0),
       };
     } catch (error) {
       console.error('채널 정보 조회 실패:', error.message);
@@ -114,7 +136,7 @@ class YouTubeAnalyzer {
     }
   }
 
-  async getChannelVideos(channelId, maxResults = 50) {
+  async getChannelVideos(channelId, maxResults = 30) {
     try {
       const channelResponse = await axios.get(`${this.baseURL}/channels`, {
         params: {
@@ -160,7 +182,10 @@ class YouTubeAnalyzer {
             comments: parseInt(stats.commentCount || 0),
             uploadDate: new Date(video.snippet.publishedAt),
             duration: this.parseDuration(video.contentDetails.duration),
-            engagement: (engagement * 100).toFixed(2)
+            engagement: (engagement * 100).toFixed(2),
+            tags: video.snippet.tags || [],
+            categoryId: video.snippet.categoryId || '',
+            definition: video.contentDetails.definition || '',
           });
         }
       }
@@ -173,7 +198,9 @@ class YouTubeAnalyzer {
   }
 
   parseDuration(duration) {
+    if (!duration) return 0;
     const match = duration.match(/PT(\d+H)?(\d+M)?(\d+S)?/);
+    if (!match) return 0;  // P0D(라이브방송), 특수 포맷 처리
     const hours = parseInt(match[1]) || 0;
     const minutes = parseInt(match[2]) || 0;
     const seconds = parseInt(match[3]) || 0;
@@ -241,6 +268,10 @@ app.post('/api/channels', async (req, res) => {
       channelName: channelInfo.channelName,
       subscribers: channelInfo.subscribers,
       totalViews: channelInfo.totalViews,
+      country: channelInfo.country,
+      channelKeywords: channelInfo.channelKeywords,
+      channelPublishedAt: channelInfo.channelPublishedAt,
+      videoCount: channelInfo.videoCount,
       pplSettings: {
         productPrice: 50000,
         adBudget: 1000000,
@@ -326,6 +357,9 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
     channel.channelName = channelInfo.channelName;
     channel.subscribers = channelInfo.subscribers;
     channel.totalViews = channelInfo.totalViews;
+    channel.country = channelInfo.country;
+    channel.channelKeywords = channelInfo.channelKeywords;
+    channel.videoCount = channelInfo.videoCount;
     channel.videos = videos;
     channel.lastUpdated = new Date();
 
@@ -484,6 +518,190 @@ app.get('/api/channels/:id/export', async (req, res) => {
 
     await workbook.xlsx.write(res);
     res.end();
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST: 댓글 분석 (구매의도 + 품질 점수)
+app.post('/api/channels/:id/analyze-comments', async (req, res) => {
+  try {
+    const channel = await Channel.findById(req.params.id);
+    if (!channel) return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
+
+    // 롱폼 영상(10분↑) 조회수 상위 10개
+    const longformVideos = channel.videos
+      .filter(v => v.duration > 600)
+      .sort((a, b) => b.views - a.views)
+      .slice(0, 10);
+
+    if (longformVideos.length === 0) {
+      return res.status(400).json({ error: '분석할 롱폼 영상이 없습니다' });
+    }
+
+    const PURCHASE_KEYWORDS = ['어디서', '얼마', '구매', '살까', '링크', '쿠팡', '직구', '추천', '구입', '가격', '파는곳', '사고싶', '구매처', '살수있', '어디파', '주문'];
+    const NEGATIVE_KEYWORDS  = ['광고', '스킵', '협찬', '뒷광고', '광고하네', '스폰서', '협찬글'];
+
+    let allComments = [];
+    let purchaseComments = [];
+
+    for (const video of longformVideos) {
+      try {
+        const response = await axios.get(`${analyzer.baseURL}/commentThreads`, {
+          params: { part: 'snippet,replies', videoId: video.videoId, maxResults: 20, order: 'relevance', key: analyzer.apiKey }
+        });
+        const items = response.data.items || [];
+        items.forEach(item => {
+          const text = item.snippet.topLevelComment.snippet.textDisplay;
+          const cleanText = text.replace(/<[^>]*>/g, '');
+          const comment = {
+            text: cleanText,
+            likeCount: item.snippet.topLevelComment.snippet.likeCount || 0,
+            replyCount: item.snippet.totalReplyCount || 0,
+          };
+          allComments.push(comment);
+          if (PURCHASE_KEYWORDS.some(k => cleanText.includes(k))) {
+            purchaseComments.push(cleanText.slice(0, 120));
+          }
+        });
+      } catch (e) { /* 댓글 비활성화 영상 스킵 */ }
+    }
+
+    if (allComments.length === 0) {
+      return res.status(400).json({ error: '댓글을 가져올 수 없습니다. 채널 댓글이 비활성화됐을 수 있습니다.' });
+    }
+
+    const purchaseCount  = allComments.filter(c => PURCHASE_KEYWORDS.some(k => c.text.includes(k))).length;
+    const negativeCount  = allComments.filter(c => NEGATIVE_KEYWORDS.some(k => c.text.includes(k))).length;
+    const withReplies    = allComments.filter(c => c.replyCount > 0).length;
+    const avgLength      = allComments.reduce((s, c) => s + c.text.length, 0) / allComments.length;
+
+    const purchaseIntentRatio = purchaseCount / allComments.length;
+    const negativeRatio       = negativeCount / allComments.length;
+    const replyRatio          = withReplies / allComments.length;
+
+    // 댓글 품질 점수 (0-100)
+    let qualityScore = 0;
+    qualityScore += Math.min(purchaseIntentRatio * 400, 40);   // 구매의도 최대 40점
+    qualityScore += Math.min((avgLength / 20) * 25, 25);       // 댓글 길이 최대 25점 (20자 기준)
+    qualityScore += Math.min(replyRatio * 100, 20);            // 답글 비율 최대 20점
+    qualityScore -= Math.min(negativeRatio * 150, 15);         // 부정 키워드 최대 -15점
+    qualityScore = Math.max(0, Math.min(100, Math.round(qualityScore)));
+
+    channel.commentAnalysis = {
+      lastAnalyzed: new Date(),
+      totalCommentsFetched: allComments.length,
+      purchaseIntentRatio: parseFloat(purchaseIntentRatio.toFixed(4)),
+      avgCommentLength: parseFloat(avgLength.toFixed(1)),
+      replyRatio: parseFloat(replyRatio.toFixed(4)),
+      negativeRatio: parseFloat(negativeRatio.toFixed(4)),
+      qualityScore,
+      topPurchaseComments: purchaseComments.slice(0, 5),
+    };
+
+    await channel.save();
+    res.json(channel);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET: 채널 검색 및 PPL 적합도 분석
+app.get('/api/search', async (req, res) => {
+  try {
+    const { keyword } = req.query;
+    if (!keyword) return res.status(400).json({ error: '검색어를 입력하세요' });
+
+    // 1. 채널 검색
+    const searchResponse = await axios.get(`${analyzer.baseURL}/search`, {
+      params: { part: 'snippet', q: keyword, type: 'channel', maxResults: 10, regionCode: 'KR', relevanceLanguage: 'ko', key: analyzer.apiKey }
+    });
+    if (!searchResponse.data.items?.length) return res.json([]);
+
+    const channelIds = searchResponse.data.items.map(item => item.snippet.channelId);
+
+    // 2. 채널 상세 정보
+    const channelResponse = await axios.get(`${analyzer.baseURL}/channels`, {
+      params: { part: 'statistics,snippet,contentDetails', id: channelIds.join(','), key: analyzer.apiKey }
+    });
+
+    // 3. 채널별 최근 영상 분석 + PPL 점수 계산
+    const results = await Promise.all(channelResponse.data.items.map(async (channel) => {
+      const stats = channel.statistics;
+      const snippet = channel.snippet;
+      let engagement = 0, longformRatio = 0, recentUpload = null;
+
+      try {
+        const uploadPlaylistId = channel.contentDetails?.relatedPlaylists?.uploads;
+        if (uploadPlaylistId) {
+          const plRes = await axios.get(`${analyzer.baseURL}/playlistItems`, {
+            params: { part: 'contentDetails', playlistId: uploadPlaylistId, maxResults: 10, key: analyzer.apiKey }
+          });
+          const videoIds = plRes.data.items.map(i => i.contentDetails.videoId);
+          if (videoIds.length > 0) {
+            const vidRes = await axios.get(`${analyzer.baseURL}/videos`, {
+              params: { part: 'statistics,contentDetails,snippet', id: videoIds.join(','), key: analyzer.apiKey }
+            });
+            const videos = vidRes.data.items.map(v => ({
+              views: parseInt(v.statistics.viewCount || 0),
+              likes: parseInt(v.statistics.likeCount || 0),
+              comments: parseInt(v.statistics.commentCount || 0),
+              duration: analyzer.parseDuration(v.contentDetails.duration),
+              publishedAt: v.snippet.publishedAt
+            }));
+            const totalEng = videos.reduce((s, v) => s + (v.views > 0 ? (v.likes + v.comments) / v.views : 0), 0);
+            engagement = videos.length > 0 ? (totalEng / videos.length * 100) : 0;
+            const lfCount = videos.filter(v => v.duration > 600).length;
+            longformRatio = videos.length > 0 ? (lfCount / videos.length * 100) : 0;
+            recentUpload = videos[0]?.publishedAt || null;
+          }
+        }
+      } catch (e) { /* 영상 조회 실패 시 점수 0으로 계속 */ }
+
+      // PPL 적합도 점수 계산 (0~100)
+      const subscribers = parseInt(stats.subscriberCount || 0);
+      let score = 0;
+      // 구독자 (30점): 10만~100만이 안마기 PPL 최적 범위
+      if (subscribers >= 100000 && subscribers <= 1000000) score += 30;
+      else if (subscribers >= 10000 && subscribers < 100000) score += 15;
+      else if (subscribers > 1000000 && subscribers <= 5000000) score += 20;
+      else if (subscribers > 5000000) score += 10;
+      // 인게이지먼트 (25점)
+      if (engagement >= 5) score += 25;
+      else if (engagement >= 3) score += 20;
+      else if (engagement >= 1) score += 10;
+      // 롱폼 비중 (20점): 안마기 PPL은 롱폼에서 효과적
+      if (longformRatio >= 60) score += 20;
+      else if (longformRatio >= 30) score += 10;
+      // 최근 활동 (15점)
+      if (recentUpload) {
+        const days = (Date.now() - new Date(recentUpload)) / 86400000;
+        if (days <= 30) score += 15;
+        else if (days <= 60) score += 10;
+        else if (days <= 90) score += 5;
+      }
+      // 한국 채널 (10점)
+      if (snippet.country === 'KR') score += 10;
+
+      return {
+        channelId: channel.id,
+        channelName: snippet.title,
+        description: (snippet.description || '').slice(0, 150),
+        thumbnail: snippet.thumbnails?.medium?.url || '',
+        subscribers,
+        totalViews: parseInt(stats.viewCount || 0),
+        videoCount: parseInt(stats.videoCount || 0),
+        country: snippet.country || '',
+        publishedAt: snippet.publishedAt,
+        engagement: parseFloat(engagement.toFixed(2)),
+        longformRatio: parseFloat(longformRatio.toFixed(0)),
+        recentUpload,
+        pplScore: Math.min(score, 100)
+      };
+    }));
+
+    results.sort((a, b) => b.pplScore - a.pplScore);
+    res.json(results);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

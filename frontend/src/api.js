@@ -1,10 +1,10 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost:3001/api';
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
 
 const api = axios.create({
   baseURL: API_URL,
-  timeout: 30000
+  timeout: 120000  // 채널 추가 시 YouTube API 다중 호출로 시간 소요
 });
 
 export const addChannel = async (channelId) => {
@@ -24,6 +24,16 @@ export const refreshChannel = async (channelId) => {
 
 export const deleteChannel = async (channelId) => {
   const response = await api.delete(`/channels/${channelId}`);
+  return response.data;
+};
+
+export const analyzeComments = async (channelId) => {
+  const response = await api.post(`/channels/${channelId}/analyze-comments`);
+  return response.data;
+};
+
+export const searchChannels = async (keyword) => {
+  const response = await api.get('/search', { params: { keyword } });
   return response.data;
 };
 
