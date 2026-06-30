@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { TrendingUp, Users, ThumbsUp, MessageCircle, Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle } from 'lucide-react';
 import { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments } from './api';
 
 const InfoTooltip = ({ content, children }) => {
@@ -51,7 +51,7 @@ export default function YouTubeAnalyzer() {
         commissionRate: ch.pplSettings.commissionRate ?? 0.1,
       });
     }
-  }, [selectedChannelId]);
+  }, [selectedChannelId, channels]);
 
   const loadChannels = async () => {
     try {
