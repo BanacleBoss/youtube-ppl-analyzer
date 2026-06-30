@@ -360,7 +360,8 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
     channel.country = channelInfo.country;
     channel.channelKeywords = channelInfo.channelKeywords;
     channel.videoCount = channelInfo.videoCount;
-    channel.videos = videos;
+    // 기존 영상 유지 + 새 영상만 추가 (누적)
+    channel.videos = [...channel.videos, ...newVideos];
     channel.lastUpdated = new Date();
 
     channel.history.push({
