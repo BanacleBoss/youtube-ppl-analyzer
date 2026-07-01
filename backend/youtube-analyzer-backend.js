@@ -395,19 +395,22 @@ class YouTubeAnalyzer {
 
         for (const video of videoResponse.data.items) {
           const stats = video.statistics;
-          const engagement = (parseInt(stats.likeCount || 0) + parseInt(stats.commentCount || 0)) / parseInt(stats.viewCount || 1);
+          const viewCount = parseInt(stats.viewCount || 0);
+          const engagementRaw = viewCount > 0
+            ? (parseInt(stats.likeCount || 0) + parseInt(stats.commentCount || 0)) / viewCount * 100
+            : 0;
           const hasPaidPromotion = video.paidProductPlacementDetails?.hasPaidProductPlacement || false;
           const hasSponsorKeyword = detectSponsorKeyword(video.snippet.description);
 
           videos.push({
             videoId: video.id,
             title: video.snippet.title,
-            views: parseInt(stats.viewCount || 0),
+            views: viewCount,
             likes: parseInt(stats.likeCount || 0),
             comments: parseInt(stats.commentCount || 0),
             uploadDate: new Date(video.snippet.publishedAt),
             duration: this.parseDuration(video.contentDetails.duration),
-            engagement: (engagement * 100).toFixed(2),
+            engagement: parseFloat(engagementRaw.toFixed(2)),
             categoryId: video.snippet.categoryId || '',
             definition: video.contentDetails.definition || '',
             hasPaidPromotion,
