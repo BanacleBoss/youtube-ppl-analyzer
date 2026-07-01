@@ -38,6 +38,8 @@ export default function YouTubeAnalyzer() {
   });
   const [sortConfig, setSortConfig] = useState({ key: 'uploadDate', direction: 'desc' });
   const [analyzingComments, setAnalyzingComments] = useState(false);
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareChannelIds, setCompareChannelIds] = useState([]);
   const [showDiscover, setShowDiscover] = useState(false);
   const [discoverKeyword, setDiscoverKeyword] = useState('안마기 리뷰');
   const [discoverResults, setDiscoverResults] = useState([]);
@@ -390,12 +392,15 @@ export default function YouTubeAnalyzer() {
       else riskLevel = '낮음';
     }
 
+    const cpm = cpv !== null ? Math.round(cpv * 1000) : null;
+
     return {
       avgViews: Math.round(avgViews),
       engagement: (engagement * 100).toFixed(2),
       expectedClicks: Math.round(expectedClicks),
       clickRate: clickRate !== null ? parseFloat(clickRate.toFixed(2)) : null,
       cpv,
+      cpm,
       estimatedQty: Math.round(estimatedQty),
       expectedRevenue: Math.round(expectedRevenue),
       unitMargin: bep.unitMargin,
@@ -535,6 +540,90 @@ export default function YouTubeAnalyzer() {
     });
   };
 
+  const toggleCompareChannel = (id) => {
+    setCompareChannelIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const generateMarkdownReport = (channel) => {
+    const lf = filterVideos(channel.videos, 'longform');
+    const mid = filterVideos(channel.videos, 'mid');
+    const shorts = filterVideos(channel.videos, 'shorts');
+    const ppl = calculatePPLRevenue(channel.videos);
+    const eff = calculateEfficiencyScore(channel);
+    const trend = calculateViewTrend(lf);
+    const ca = channel.commentAnalysis;
+    const now = new Date().toLocaleDateString('ko-KR');
+
+    const lines = [
+      `# 📊 채널 검토 리포트 — ${channel.channelName}`,
+      `> 생성일: ${now}`,
+      ``,
+      `## 기본 정보`,
+      `| 항목 | 값 |`,
+      `|------|-----|`,
+      `| 구독자 | ${(channel.subscribers/10000).toFixed(1)}만 |`,
+      `| 총 조회수 | ${(channel.totalViews/100000000).toFixed(1)}억 |`,
+      `| 국가 | ${channel.country || '-'} |`,
+      `| 롱폼 영상 수 | ${lf.length}개 |`,
+      `| 미드폼 영상 수 | ${mid.length}개 |`,
+      `| 숏폼 영상 수 | ${shorts.length}개 |`,
+      ``,
+      `## ⚡ 채널 효율 점수: **${eff.total}점 / 100점**`,
+      `| 지표 | 값 | 점수 |`,
+      `|------|-----|------|`,
+      `| 구독자 대비 조회수 | ${eff.details.viewsRatio}% | ${eff.details.viewsScore}/25 |`,
+      `| 평균 업로드 주기 | ${eff.details.avgGapDays !== null ? eff.details.avgGapDays+'일' : '-'} | ${eff.details.uploadScore}/25 |`,
+      `| 인게이지먼트율 | ${eff.details.engRate}% | ${eff.details.engScore}/25 |`,
+      `| 롱폼 비율 | ${eff.details.longformRatio}% | ${eff.details.lfScore}/25 |`,
+      ``,
+      `## 📈 PPL 분석 (최근 롱폼 10개 기준)`,
+      `| 항목 | 값 |`,
+      `|------|-----|`,
+      `| 평균 조회수 | ${(ppl.avgViews/1000).toFixed(1)}K |`,
+      `| 인게이지먼트 | ${ppl.engagement}% |`,
+      `| CPV (조회수당 비용) | ${ppl.cpv !== null ? ppl.cpv.toLocaleString()+'원' : '미입력'} |`,
+      `| CPM (1,000회당) | ${ppl.cpm !== null ? ppl.cpm.toLocaleString()+'원' : '미입력'} |`,
+      `| 예상 클릭수 | ${ppl.expectedClicks.toLocaleString()}회 |`,
+      `| 예상 판매수량 | ${ppl.estimatedQty.toLocaleString()}개 |`,
+      `| 예상 매출 | ${ppl.expectedRevenue.toLocaleString()}원 |`,
+      `| 순이익 | ${ppl.netProfit.toLocaleString()}원 |`,
+      `| ROI | ${ppl.roi !== null ? ppl.roi+'%' : '계산 불가'} |`,
+      `| ROAS | ${ppl.roas !== null ? ppl.roas+'%' : '계산 불가'} |`,
+      `| 위험도 | ${ppl.riskLevel} |`,
+    ];
+
+    if (trend) {
+      lines.push(``, `## 📊 조회수 트렌드`);
+      lines.push(`- 최근 10개 평균: **${(trend.recentAvg/1000).toFixed(1)}K**`);
+      lines.push(`- 이전 10개 평균: **${trend.prevAvg ? (trend.prevAvg/1000).toFixed(1)+'K' : '-'}**`);
+      if (trend.change !== null) lines.push(`- 변화율: **${trend.change > 0 ? '+' : ''}${trend.change}%**`);
+    }
+
+    if (ca?.qualityScore != null) {
+      lines.push(``, `## 💬 댓글 품질 분석`);
+      lines.push(`| 지표 | 값 |`);
+      lines.push(`|------|-----|`);
+      lines.push(`| 댓글 품질 점수 | ${ca.qualityScore}점 |`);
+      lines.push(`| 구매의도 댓글 비율 | ${(ca.purchaseIntentRatio*100).toFixed(1)}% |`);
+      lines.push(`| 평균 댓글 길이 | ${ca.avgCommentLength}자 |`);
+      lines.push(`| 광고 부정 반응 | ${(ca.negativeRatio*100).toFixed(1)}% |`);
+    }
+
+    if (channel.campaignLogs?.length > 0) {
+      lines.push(``, `## 📋 과거 캠페인 실적`);
+      lines.push(`| 날짜 | 실제 판매수량 | 실제 매출 | 메모 |`);
+      lines.push(`|------|------|------|------|`);
+      channel.campaignLogs.forEach(log => {
+        lines.push(`| ${log.date} | ${log.actualQty?.toLocaleString()}개 | ${log.actualRevenue?.toLocaleString()}원 | ${log.note || '-'} |`);
+      });
+    }
+
+    lines.push(``, `---`, `*YouTube PPL 분석기 PRO 자동 생성*`);
+    return lines.join('\n');
+  };
+
   const SortIcon = ({ column }) => {
     if (sortConfig.key !== column) return <span className="text-slate-500">↕️</span>;
     return sortConfig.direction === 'desc' ? <ArrowDown size={14} /> : <ArrowUp size={14} />;
@@ -566,6 +655,9 @@ export default function YouTubeAnalyzer() {
               </button>
               <button onClick={() => setShowDiscover(!showDiscover)} className={`flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border ${showDiscover ? 'bg-purple-600/20 border-purple-500 text-purple-300' : 'bg-transparent border-slate-600 text-slate-300 hover:border-slate-500 hover:text-white'}`}>
                 🔍 채널 발굴
+              </button>
+              <button onClick={() => { setCompareMode(!compareMode); setCompareChannelIds([]); }} className={`flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border ${compareMode ? 'bg-orange-600/20 border-orange-500 text-orange-300' : 'bg-transparent border-slate-600 text-slate-300 hover:border-slate-500 hover:text-white'}`}>
+                ⚖️ {compareMode ? `비교 중 (${compareChannelIds.length}개 선택)` : '채널 비교'}
               </button>
               <button onClick={() => setShowAddForm(true)} className="flex-1 sm:flex-none justify-center bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition text-sm font-semibold shadow-lg shadow-blue-900/40" disabled={loading}>
                 <Plus size={18} /> 채널 추가
@@ -755,6 +847,9 @@ export default function YouTubeAnalyzer() {
                 {channels.map(channel => (
                   <div key={channel._id} onClick={() => setSelectedChannelId(channel._id)} className={`p-4 rounded-lg border cursor-pointer transition ${selectedChannelId === channel._id ? 'bg-slate-800 border-blue-500 ring-1 ring-blue-500' : 'bg-slate-800 border-slate-700 hover:border-slate-600'}`}>
                     <div className="flex items-center gap-3 mb-2">
+                      {compareMode && (
+                        <input type="checkbox" checked={compareChannelIds.includes(channel._id)} onChange={e => { e.stopPropagation(); toggleCompareChannel(channel._id); }} className="w-4 h-4 accent-orange-500 flex-shrink-0 cursor-pointer" />
+                      )}
                       <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${selectedChannelId === channel._id ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300'}`}>
                         {channel.channelName?.charAt(0) || '?'}
                       </div>
@@ -786,6 +881,11 @@ export default function YouTubeAnalyzer() {
                       {tab === 'summary' && '📊 요약'} {tab === 'longform' && '🎬 롱폼(10분↑)'} {tab === 'mid' && '▶️ 미드폼(1~10분)'} {tab === 'shorts' && '📱 숏폼(60초↓)'} {tab === 'settings' && '⚙️ 설정'} {tab === 'bep' && '💰 손익/BEP'} {tab === 'trends' && '📈 트렌드'} {tab === 'export' && '📥 내보내기'}
                     </button>
                   ))}
+                  {compareMode && compareChannelIds.length >= 2 && (
+                    <button onClick={() => setActiveTab('compare')} className={`px-3.5 py-2 rounded-lg font-medium text-sm transition whitespace-nowrap flex-shrink-0 ${activeTab === 'compare' ? 'bg-orange-600 text-white' : 'bg-orange-900/40 text-orange-300 hover:bg-orange-800/40'}`}>
+                      ⚖️ 채널 비교
+                    </button>
+                  )}
                 </div>
 
                 {activeTab === 'summary' && (
@@ -1233,6 +1333,10 @@ export default function YouTubeAnalyzer() {
                           <p className="text-xl font-bold text-white">{pplData.cpv !== null && pplData.cpv !== undefined ? `${pplData.cpv.toLocaleString()}원` : '계산 불가'}</p>
                         </div>
                         <div className="bg-slate-800/80 rounded-lg p-4">
+                          <InfoTooltip content="= CPV × 1,000. 광고 노출 1,000회당 비용. 유튜브 평균 CPM은 2,000~8,000원 수준입니다."><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">CPM (1,000회 노출당)</p></InfoTooltip>
+                          <p className="text-xl font-bold text-yellow-400">{pplData.cpm !== null && pplData.cpm !== undefined ? `${pplData.cpm.toLocaleString()}원` : '계산 불가'}</p>
+                        </div>
+                        <div className="bg-slate-800/80 rounded-lg p-4">
                           <InfoTooltip content="= 총 MG × 대행사 MG 분담율"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">대행사(쇼크) MG 분담금</p></InfoTooltip>
                           <p className="text-xl font-bold text-white">{bep.agencyMGShare.toLocaleString()}원</p>
                         </div>
@@ -1310,6 +1414,57 @@ export default function YouTubeAnalyzer() {
                         ) : (
                           <p className="text-slate-500 text-sm text-center py-4">아직 기록된 실적이 없습니다.</p>
                         )}
+
+                        {/* 과거 실적 평균 vs 현재 예측 비교 */}
+                        {selectedChannel.campaignLogs?.length > 0 && (() => {
+                          const logs = selectedChannel.campaignLogs;
+                          const avgActualQty = Math.round(logs.reduce((s, l) => s + (l.actualQty || 0), 0) / logs.length);
+                          const avgActualRevenue = Math.round(logs.reduce((s, l) => s + (l.actualRevenue || 0), 0) / logs.length);
+                          const avgActualROI = logs.filter(l => l.actualRevenue && pplData.ourMGShare > 0).length > 0
+                            ? (logs.reduce((s, l) => s + (((l.actualRevenue || 0) - pplData.ourMGShare) / pplData.ourMGShare * 100), 0) / logs.length).toFixed(1)
+                            : null;
+                          return (
+                            <div className="mt-6 bg-slate-800 border border-blue-500/30 rounded-lg p-4">
+                              <h4 className="text-white font-semibold mb-3">📊 과거 실적 평균 vs 현재 예측 비교</h4>
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                  <thead><tr className="text-slate-400 text-xs">
+                                    <th className="text-left p-2">지표</th>
+                                    <th className="text-right p-2">과거 평균 ({logs.length}회)</th>
+                                    <th className="text-right p-2">현재 예측</th>
+                                    <th className="text-right p-2">차이</th>
+                                  </tr></thead>
+                                  <tbody>
+                                    <tr className="border-t border-slate-700">
+                                      <td className="p-2 text-slate-300">판매수량</td>
+                                      <td className="text-right p-2 text-white">{avgActualQty.toLocaleString()}개</td>
+                                      <td className="text-right p-2 text-blue-400">{pplData.estimatedQty?.toLocaleString()}개</td>
+                                      <td className={`text-right p-2 font-semibold ${pplData.estimatedQty >= avgActualQty ? 'text-green-400' : 'text-red-400'}`}>
+                                        {pplData.estimatedQty >= avgActualQty ? '+' : ''}{(pplData.estimatedQty - avgActualQty).toLocaleString()}개
+                                      </td>
+                                    </tr>
+                                    <tr className="border-t border-slate-700">
+                                      <td className="p-2 text-slate-300">매출</td>
+                                      <td className="text-right p-2 text-white">{avgActualRevenue.toLocaleString()}원</td>
+                                      <td className="text-right p-2 text-blue-400">{pplData.expectedRevenue?.toLocaleString()}원</td>
+                                      <td className={`text-right p-2 font-semibold ${pplData.expectedRevenue >= avgActualRevenue ? 'text-green-400' : 'text-red-400'}`}>
+                                        {pplData.expectedRevenue >= avgActualRevenue ? '+' : ''}{(pplData.expectedRevenue - avgActualRevenue).toLocaleString()}원
+                                      </td>
+                                    </tr>
+                                    {avgActualROI !== null && (
+                                      <tr className="border-t border-slate-700">
+                                        <td className="p-2 text-slate-300">ROI</td>
+                                        <td className="text-right p-2 text-white">{avgActualROI}%</td>
+                                        <td className="text-right p-2 text-blue-400">{pplData.roi !== null ? pplData.roi+'%' : '-'}</td>
+                                        <td className="text-right p-2 text-slate-400">-</td>
+                                      </tr>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
@@ -1336,14 +1491,106 @@ export default function YouTubeAnalyzer() {
                 )}
 
                 {activeTab === 'export' && (
-                  <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+                  <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-4">
                     <h3 className="text-lg font-bold text-white mb-4">📥 데이터 내보내기</h3>
                     <button onClick={handleExportExcel} className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg flex items-center justify-center gap-2 transition font-semibold">
                       <Download size={20} /> Excel 다운로드 (상세 분석)
                     </button>
-                    <p className="text-slate-400 text-sm mt-4">✓ 요약 분석 시트<br/>✓ 롱폼/숏폼 상세 분석<br/>✓ 일일 통계 데이터<br/>✓ 30일 트렌드 분석</p>
+                    <div className="border-t border-slate-700 pt-4">
+                      <h4 className="text-white font-semibold mb-2">📋 채널 검토 리포트</h4>
+                      <p className="text-slate-400 text-xs mb-3">PPT·노션에 붙여넣기 좋은 마크다운 형식으로 생성됩니다</p>
+                      <button
+                        onClick={() => {
+                          const md = generateMarkdownReport(selectedChannel);
+                          navigator.clipboard.writeText(md).then(() => setError('✓ 마크다운 리포트가 클립보드에 복사됐습니다'));
+                        }}
+                        className="w-full bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-lg flex items-center justify-center gap-2 transition font-semibold"
+                      >
+                        📋 마크다운 리포트 복사
+                      </button>
+                    </div>
+                    <p className="text-slate-500 text-xs mt-2">✓ 요약 분석 시트 · ✓ 롱폼/숏폼 상세 · ✓ 일일 통계 · ✓ 30일 트렌드 · ✓ 채널 검토 리포트</p>
                   </div>
                 )}
+
+                {activeTab === 'compare' && (() => {
+                  const compareChannels = channels.filter(ch => compareChannelIds.includes(ch._id));
+                  if (compareChannels.length < 2) return (
+                    <div className="bg-slate-800 border border-slate-700 rounded-lg p-8 text-center">
+                      <p className="text-slate-400">왼쪽 채널 목록에서 2개 이상 체크하세요</p>
+                    </div>
+                  );
+                  const metrics = compareChannels.map(ch => {
+                    const lf = filterVideos(ch.videos, 'longform');
+                    const recent = [...lf].sort((a,b) => new Date(b.uploadDate)-new Date(a.uploadDate)).slice(0,10);
+                    const avgViews = recent.length > 0 ? Math.round(recent.reduce((s,v) => s+(v.views||0), 0)/recent.length) : 0;
+                    const engagement = recent.length > 0 ? (recent.reduce((s,v) => s+(parseFloat(v.engagement)||0), 0)/recent.length).toFixed(2) : '0';
+                    const eff = calculateEfficiencyScore(ch);
+                    return { ch, avgViews, engagement, eff, lf: lf.length };
+                  });
+
+                  const copyCompareReport = () => {
+                    const lines = [
+                      `# ⚖️ 채널 비교 리포트`,
+                      `> 생성일: ${new Date().toLocaleDateString('ko-KR')}`,
+                      ``,
+                      `| 항목 | ${metrics.map(m => m.ch.channelName).join(' | ')} |`,
+                      `|------|${metrics.map(() => '------').join('|')}|`,
+                      `| 구독자 | ${metrics.map(m => (m.ch.subscribers/10000).toFixed(1)+'만').join(' | ')} |`,
+                      `| 평균 조회수 | ${metrics.map(m => (m.avgViews/1000).toFixed(1)+'K').join(' | ')} |`,
+                      `| 인게이지먼트 | ${metrics.map(m => m.engagement+'%').join(' | ')} |`,
+                      `| 롱폼 수 | ${metrics.map(m => m.lf+'개').join(' | ')} |`,
+                      `| 효율 점수 | ${metrics.map(m => m.eff.total+'점').join(' | ')} |`,
+                    ];
+                    navigator.clipboard.writeText(lines.join('\n')).then(() => setError('✓ 비교 리포트가 클립보드에 복사됐습니다'));
+                  };
+
+                  return (
+                    <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+                      <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-lg font-bold text-white">⚖️ 채널 비교 ({compareChannels.length}개)</h3>
+                        <button onClick={copyCompareReport} className="bg-purple-600 hover:bg-purple-700 text-white text-sm px-4 py-2 rounded transition">📋 비교표 복사</button>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="border-b border-slate-600">
+                            <tr className="text-slate-300">
+                              <th className="text-left p-3">항목</th>
+                              {metrics.map(m => <th key={m.ch._id} className="text-right p-3 text-blue-300">{m.ch.channelName}</th>)}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {[
+                              { label: '구독자', getValue: m => `${(m.ch.subscribers/10000).toFixed(1)}만`, best: 'max', getNum: m => m.ch.subscribers },
+                              { label: '평균 조회수', getValue: m => `${(m.avgViews/1000).toFixed(1)}K`, best: 'max', getNum: m => m.avgViews },
+                              { label: '인게이지먼트', getValue: m => `${m.engagement}%`, best: 'max', getNum: m => parseFloat(m.engagement) },
+                              { label: '롱폼 수', getValue: m => `${m.lf}개`, best: 'max', getNum: m => m.lf },
+                              { label: '⚡ 효율 점수', getValue: m => `${m.eff.total}점`, best: 'max', getNum: m => m.eff.total },
+                              { label: '구독자 대비 조회수', getValue: m => `${m.eff.details.viewsRatio}%`, best: 'max', getNum: m => parseFloat(m.eff.details.viewsRatio) },
+                              { label: '업로드 주기', getValue: m => m.eff.details.avgGapDays !== null ? `${m.eff.details.avgGapDays}일` : '-', best: 'min', getNum: m => m.eff.details.avgGapDays ?? 999 },
+                              { label: '롱폼 비율', getValue: m => `${m.eff.details.longformRatio}%`, best: 'max', getNum: m => parseFloat(m.eff.details.longformRatio) },
+                            ].map(row => {
+                              const nums = metrics.map(m => row.getNum(m));
+                              const bestVal = row.best === 'max' ? Math.max(...nums) : Math.min(...nums.filter(n => n < 999));
+                              return (
+                                <tr key={row.label} className="border-t border-slate-700 hover:bg-slate-700/50">
+                                  <td className="p-3 text-slate-300 font-medium">{row.label}</td>
+                                  {metrics.map((m, i) => (
+                                    <td key={m.ch._id} className={`text-right p-3 font-semibold ${nums[i] === bestVal ? 'text-green-400' : 'text-white'}`}>
+                                      {row.getValue(m)}
+                                      {nums[i] === bestVal && <span className="text-xs ml-1">✓</span>}
+                                    </td>
+                                  ))}
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      <p className="text-slate-500 text-xs mt-3">✓ 표시는 각 항목에서 가장 좋은 채널입니다</p>
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
