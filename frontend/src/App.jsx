@@ -853,7 +853,19 @@ export default function YouTubeAnalyzer() {
                           <tbody>
                             {sortedLongformVideos?.map((video, idx) => (
                               <tr key={idx} className="border-b border-slate-700 hover:bg-slate-700 transition">
-                                <td className="p-2 text-slate-300 truncate max-w-xs">{idx + 1}. {video.title}</td>
+                                <td className="p-2 text-slate-300 max-w-xs">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="truncate">{idx + 1}. {video.title}</span>
+                                    {video.isAd && (
+                                      <span
+                                        className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40"
+                                        title={video.hasPaidPromotion ? 'YouTube 공식 유료 프로모션 표기' : '설명란에서 광고/협찬 문구 감지'}
+                                      >
+                                        광고
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
                                 <td className="text-right p-2 text-white font-semibold">{(video.views/1000).toFixed(0)}K</td>
                                 <td className="text-right p-2 text-blue-400">{(video.likes/1000).toFixed(1)}K</td>
                                 <td className="text-right p-2 text-green-400">{(video.comments/1000).toFixed(1)}K</td>
@@ -881,7 +893,19 @@ export default function YouTubeAnalyzer() {
                           <tbody>
                             {sortedMidVideos.map((video, idx) => (
                               <tr key={idx} className="border-b border-slate-700 hover:bg-slate-700 transition">
-                                <td className="p-2 text-slate-300 truncate max-w-xs">{idx + 1}. {video.title}</td>
+                                <td className="p-2 text-slate-300 max-w-xs">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="truncate">{idx + 1}. {video.title}</span>
+                                    {video.isAd && (
+                                      <span
+                                        className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40"
+                                        title={video.hasPaidPromotion ? 'YouTube 공식 유료 프로모션 표기' : '설명란에서 광고/협찬 문구 감지'}
+                                      >
+                                        광고
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
                                 <td className="text-right p-2 text-white font-semibold">{(video.views/1000).toFixed(0)}K</td>
                                 <td className="text-right p-2 text-blue-400">{(video.likes/1000).toFixed(1)}K</td>
                                 <td className="text-right p-2 text-green-400">{(video.comments/1000).toFixed(1)}K</td>
@@ -909,7 +933,19 @@ export default function YouTubeAnalyzer() {
                           <tbody>
                             {sortedShortsVideos?.map((video, idx) => (
                               <tr key={idx} className="border-b border-slate-700 hover:bg-slate-700 transition">
-                                <td className="p-2 text-slate-300 truncate max-w-xs">{idx + 1}. {video.title}</td>
+                                <td className="p-2 text-slate-300 max-w-xs">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="truncate">{idx + 1}. {video.title}</span>
+                                    {video.isAd && (
+                                      <span
+                                        className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40"
+                                        title={video.hasPaidPromotion ? 'YouTube 공식 유료 프로모션 표기' : '설명란에서 광고/협찬 문구 감지'}
+                                      >
+                                        광고
+                                      </span>
+                                    )}
+                                  </div>
+                                </td>
                                 <td className="text-right p-2 text-white font-semibold">{(video.views/1000).toFixed(0)}K</td>
                                 <td className="text-right p-2 text-blue-400">{(video.likes/1000).toFixed(1)}K</td>
                                 <td className="text-right p-2 text-green-400">{(video.comments/1000).toFixed(1)}K</td>

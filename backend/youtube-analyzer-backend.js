@@ -73,6 +73,9 @@ const channelSchema = new mongoose.Schema({
     tags: [String],
     categoryId: String,
     definition: String,
+    hasPaidPromotion: { type: Boolean, default: false },  // 유튜브 공식 "유료 프로모션 포함" 표기
+    hasSponsorKeyword: { type: Boolean, default: false }, // 설명란 광고/협찬 키워드 감지
+    isAd: { type: Boolean, default: false },              // 위 둘 중 하나라도 해당하면 true
     collectedAt: { type: Date, default: Date.now }
   }],
   
@@ -198,6 +201,19 @@ function calculatePPLSummary(videos, settings) {
   };
 }
 
+// 영상 설명란에서 협찬/광고 고지 문구를 탐지 (유튜브의 공식 "유료 프로모션" 플래그를
+// 켜지 않고 설명란에만 고지하는 경우를 보완하기 위한 보조 신호)
+const SPONSOR_KEYWORDS = [
+  '유료광고', '유료 광고', '협찬', 'PPL', '광고 포함', '광고포함',
+  '제품을 제공받아', '제품 제공', '제공받아', '지원을 받아', '지원받아',
+  '원고료', '이 영상은 광고', 'sponsored', 'paid partnership', '유료 파트너십'
+];
+function detectSponsorKeyword(description) {
+  if (!description) return false;
+  const lower = description.toLowerCase();
+  return SPONSOR_KEYWORDS.some(kw => lower.includes(kw.toLowerCase()));
+}
+
 class YouTubeAnalyzer {
   constructor(apiKey) {
     this.apiKey = apiKey;
@@ -286,7 +302,7 @@ class YouTubeAnalyzer {
         const batch = videoIds.slice(i, i + 50);
         const videoResponse = await axios.get(`${this.baseURL}/videos`, {
           params: {
-            part: 'statistics,snippet,contentDetails',
+            part: 'statistics,snippet,contentDetails,paidProductPlacementDetails',
             id: batch.join(','),
             key: this.apiKey
           }
@@ -295,6 +311,8 @@ class YouTubeAnalyzer {
         for (const video of videoResponse.data.items) {
           const stats = video.statistics;
           const engagement = (parseInt(stats.likeCount || 0) + parseInt(stats.commentCount || 0)) / parseInt(stats.viewCount || 1);
+          const hasPaidPromotion = video.paidProductPlacementDetails?.hasPaidProductPlacement || false;
+          const hasSponsorKeyword = detectSponsorKeyword(video.snippet.description);
 
           videos.push({
             videoId: video.id,
@@ -308,6 +326,9 @@ class YouTubeAnalyzer {
             tags: video.snippet.tags || [],
             categoryId: video.snippet.categoryId || '',
             definition: video.contentDetails.definition || '',
+            hasPaidPromotion,
+            hasSponsorKeyword,
+            isAd: hasPaidPromotion || hasSponsorKeyword,
           });
         }
       }
@@ -693,7 +714,8 @@ app.get('/api/channels/:id/export', async (req, res) => {
       { header: '좋아요', key: 'likes', width: 12 },
       { header: '댓글', key: 'comments', width: 12 },
       { header: '인게이지먼트', key: 'engagement', width: 15 },
-      { header: '업로드일', key: 'uploadDate', width: 15 }
+      { header: '업로드일', key: 'uploadDate', width: 15 },
+      { header: '광고/PPL 여부', key: 'isAd', width: 14 }
     ];
 
     channel.videos.forEach((video, index) => {
@@ -704,7 +726,8 @@ app.get('/api/channels/:id/export', async (req, res) => {
         likes: video.likes.toLocaleString(),
         comments: video.comments.toLocaleString(),
         engagement: video.engagement + '%',
-        uploadDate: new Date(video.uploadDate).toLocaleDateString('ko-KR')
+        uploadDate: new Date(video.uploadDate).toLocaleDateString('ko-KR'),
+        isAd: video.isAd ? '광고' : ''
       });
     });
 
