@@ -41,6 +41,8 @@ export default function YouTubeAnalyzer() {
   const [compareMode, setCompareMode] = useState(false);
   const [compareChannelIds, setCompareChannelIds] = useState([]);
   const [showDiscover, setShowDiscover] = useState(false);
+  const [channelSearch, setChannelSearch] = useState('');
+  const [channelSortBy, setChannelSortBy] = useState('name'); // name | score | subscribers
   const [discoverKeyword, setDiscoverKeyword] = useState('안마기 리뷰');
   const [discoverResults, setDiscoverResults] = useState([]);
   const [discovering, setDiscovering] = useState(false);
@@ -452,9 +454,10 @@ export default function YouTubeAnalyzer() {
     else if (viewsRatio >= 15) viewsScore = 20;
     else if (viewsRatio >= 5) viewsScore = 13;
 
-    // 2. 업로드 주기 (최근 10개 영상 간격 평균)
+    // 2. 업로드 주기 (롱폼 기준 최근 10개 간격 평균)
     let uploadScore = 5;
-    const recentDates = sorted.slice(0, 10).map(v => new Date(v.uploadDate)).filter(d => !isNaN(d));
+    const lfSorted = [...lf].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
+    const recentDates = lfSorted.slice(0, 10).map(v => new Date(v.uploadDate)).filter(d => !isNaN(d));
     if (recentDates.length >= 2) {
       let totalGap = 0;
       for (let i = 0; i < recentDates.length - 1; i++) {
@@ -620,7 +623,7 @@ export default function YouTubeAnalyzer() {
       });
     }
 
-    lines.push(``, `---`, `*YouTube PPL 분석기 PRO 자동 생성*`);
+    lines.push(``, `---`, `*YouTube PPL 분석기 PRO | Built by Jay Jeong (정승환)*`);
     return lines.join('\n');
   };
 
@@ -646,8 +649,8 @@ export default function YouTubeAnalyzer() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
             <div>
-              <h1 className="text-xl sm:text-3xl font-bold text-white">📊 YouTube PPL 분석기 PRO</h1>
-              <p className="text-slate-400 mt-1 text-sm sm:text-base">{channels.length}개 채널 분석 중</p>
+              <h1 className="text-xl sm:text-3xl font-bold text-white tracking-tight">📊 YouTube PPL 분석기 <span className="text-blue-400">PRO</span></h1>
+              <p className="text-slate-500 mt-0.5 text-xs sm:text-sm">{channels.length}개 채널 · Built by <span className="text-slate-400 font-medium">Jay Jeong</span></p>
             </div>
             <div className="flex flex-wrap gap-2 sm:gap-3">
               <button onClick={() => setShowItemManager(!showItemManager)} className={`flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border ${showItemManager ? 'bg-emerald-600/20 border-emerald-500 text-emerald-300' : 'bg-transparent border-slate-600 text-slate-300 hover:border-slate-500 hover:text-white'}`}>
@@ -843,33 +846,61 @@ export default function YouTubeAnalyzer() {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-1">
-              <div className="space-y-3 max-h-96 overflow-y-auto">
-                {channels.map(channel => (
-                  <div key={channel._id} onClick={() => setSelectedChannelId(channel._id)} className={`p-4 rounded-lg border cursor-pointer transition ${selectedChannelId === channel._id ? 'bg-slate-800 border-blue-500 ring-1 ring-blue-500' : 'bg-slate-800 border-slate-700 hover:border-slate-600'}`}>
-                    <div className="flex items-center gap-3 mb-2">
-                      {compareMode && (
-                        <input type="checkbox" checked={compareChannelIds.includes(channel._id)} onChange={e => { e.stopPropagation(); toggleCompareChannel(channel._id); }} className="w-4 h-4 accent-orange-500 flex-shrink-0 cursor-pointer" />
-                      )}
-                      <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${selectedChannelId === channel._id ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300'}`}>
-                        {channel.channelName?.charAt(0) || '?'}
+              {/* 채널 검색 + 정렬 */}
+              <div className="mb-3 space-y-2">
+                <input
+                  type="text"
+                  value={channelSearch}
+                  onChange={e => setChannelSearch(e.target.value)}
+                  placeholder="🔎 채널 검색..."
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+                />
+                <div className="flex gap-1.5">
+                  {[['name','이름순'],['score','효율점수'],['subscribers','구독자']].map(([val, label]) => (
+                    <button key={val} onClick={() => setChannelSortBy(val)} className={`flex-1 text-xs py-1.5 rounded transition font-medium ${channelSortBy === val ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>{label}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2 overflow-y-auto" style={{maxHeight:'calc(100vh - 280px)'}}>
+                {(() => {
+                  let list = [...channels];
+                  if (channelSearch.trim()) list = list.filter(ch => ch.channelName?.toLowerCase().includes(channelSearch.toLowerCase()));
+                  if (channelSortBy === 'score') list.sort((a,b) => calculateEfficiencyScore(b).total - calculateEfficiencyScore(a).total);
+                  else if (channelSortBy === 'subscribers') list.sort((a,b) => (b.subscribers||0) - (a.subscribers||0));
+                  else list.sort((a,b) => (a.channelName||'').localeCompare(b.channelName||'', 'ko'));
+                  if (list.length === 0) return <p className="text-slate-500 text-sm text-center py-6">검색 결과가 없습니다</p>;
+                  return list.map(channel => {
+                    const eff = calculateEfficiencyScore(channel);
+                    const badgeColor = eff.total >= 75 ? 'bg-green-500/20 text-green-400 border-green-500/40' : eff.total >= 50 ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40' : 'bg-red-500/20 text-red-400 border-red-500/40';
+                    return (
+                      <div key={channel._id} onClick={() => setSelectedChannelId(channel._id)} className={`p-3.5 rounded-xl border cursor-pointer transition-all ${selectedChannelId === channel._id ? 'bg-blue-950/60 border-blue-500 ring-1 ring-blue-500/50 shadow-lg shadow-blue-900/20' : 'bg-slate-800/80 border-slate-700/80 hover:border-slate-600 hover:bg-slate-800'}`}>
+                        <div className="flex items-center gap-3 mb-2">
+                          {compareMode && (
+                            <input type="checkbox" checked={compareChannelIds.includes(channel._id)} onChange={e => { e.stopPropagation(); toggleCompareChannel(channel._id); }} className="w-4 h-4 accent-orange-500 flex-shrink-0 cursor-pointer" />
+                          )}
+                          <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${selectedChannelId === channel._id ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300'}`}>
+                            {channel.channelName?.charAt(0) || '?'}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <h3 className="font-semibold text-white truncate leading-tight text-sm">{channel.channelName}</h3>
+                            <p className="text-xs text-slate-400">구독자 {channel.subscribers >= 1000000 ? (channel.subscribers/1000000).toFixed(1)+'M' : (channel.subscribers/1000).toFixed(0)+'K'}</p>
+                          </div>
+                          <span className={`flex-shrink-0 text-xs font-bold px-2 py-0.5 rounded-full border ${badgeColor}`}>{eff.total}점</span>
+                        </div>
+                        <p className="text-xs text-slate-500 mb-2.5">롱폼 {filterVideos(channel.videos, 'longform').length} · 미드 {filterVideos(channel.videos, 'mid').length} · 숏폼 {filterVideos(channel.videos, 'shorts').length}</p>
+                        <div className="flex gap-1.5">
+                          <button onClick={(e) => { e.stopPropagation(); handleRefreshChannel(channel._id); }} disabled={refreshing[channel._id]} className="flex-1 bg-slate-700/80 hover:bg-blue-600 disabled:opacity-50 text-slate-300 hover:text-white text-xs py-1.5 rounded-lg transition flex items-center justify-center gap-1">
+                            {refreshing[channel._id] ? <Loader size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                            {refreshing[channel._id] ? '갱신 중' : '갱신'}
+                          </button>
+                          <button onClick={(e) => { e.stopPropagation(); handleDeleteChannel(channel._id); }} className="bg-slate-700/80 hover:bg-red-600/80 text-slate-400 hover:text-white p-1.5 rounded-lg transition">
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <h3 className="font-semibold text-white truncate leading-tight">{channel.channelName}</h3>
-                        <p className="text-xs text-slate-400">구독자 {(channel.subscribers/1000).toFixed(0)}K</p>
-                      </div>
-                    </div>
-                    <p className="text-xs text-slate-500 mb-3">롱폼 {filterVideos(channel.videos, 'longform').length} · 미드 {filterVideos(channel.videos, 'mid').length} · 숏폼 {filterVideos(channel.videos, 'shorts').length}</p>
-                    <div className="flex gap-2">
-                      <button onClick={(e) => { e.stopPropagation(); handleRefreshChannel(channel._id); }} disabled={refreshing[channel._id]} className="flex-1 bg-slate-700 hover:bg-blue-600 disabled:opacity-50 text-slate-200 hover:text-white text-xs py-1.5 rounded transition flex items-center justify-center gap-1">
-                        {refreshing[channel._id] ? <Loader size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                        {refreshing[channel._id] ? '중...' : '갱신'}
-                      </button>
-                      <button onClick={(e) => { e.stopPropagation(); handleDeleteChannel(channel._id); }} className="bg-slate-700 hover:bg-red-600 text-slate-200 hover:text-white p-1.5 rounded transition">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                    );
+                  });
+                })()}
               </div>
             </div>
 
@@ -1596,8 +1627,9 @@ export default function YouTubeAnalyzer() {
           </div>
         )}
 
-        <div className="mt-12 text-center text-slate-400 text-sm">
-          <p>💡 팁: 정기적으로 갱신하여 최신 통계를 확인하세요</p>
+        <div className="mt-12 border-t border-slate-800 pt-6 text-center space-y-1">
+          <p className="text-slate-500 text-xs">💡 팁: 정기적으로 갱신하여 최신 통계를 확인하세요</p>
+          <p className="text-slate-600 text-xs">YouTube PPL 분석기 PRO · Built by <span className="text-slate-500 font-medium">Jay Jeong (정승환)</span></p>
         </div>
       </div>
     </div>
