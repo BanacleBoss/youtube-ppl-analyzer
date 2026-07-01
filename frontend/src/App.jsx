@@ -32,7 +32,7 @@ export default function YouTubeAnalyzer() {
   const [refreshing, setRefreshing] = useState({});
   const [activeTab, setActiveTab] = useState('summary');
   const [settings, setSettings] = useState({
-    productPrice: 50000, adBudget: 1000000, expectedConversionRate: 0.03, commissionRate: 0.1,
+    productPrice: 50000, expectedConversionRate: 0.03,
     itemId: '', itemName: '', cost: 0, shippingCost: 0, giftCost: 0, pgFeeRate: 0.0385,
     totalMG: 0, agencyMGShareRate: 0.3, rsRate: 0.2
   });
@@ -57,9 +57,7 @@ export default function YouTubeAnalyzer() {
     if (ch?.pplSettings) {
       setSettings({
         productPrice: ch.pplSettings.productPrice ?? 50000,
-        adBudget: ch.pplSettings.adBudget ?? 1000000,
         expectedConversionRate: ch.pplSettings.expectedConversionRate ?? 0.03,
-        commissionRate: ch.pplSettings.commissionRate ?? 0.1,
         itemId: ch.pplSettings.itemId ?? '',
         itemName: ch.pplSettings.itemName ?? '',
         cost: ch.pplSettings.cost ?? 0,
@@ -944,9 +942,7 @@ export default function YouTubeAnalyzer() {
                         {items.length === 0 && <p className="text-xs text-slate-500 mt-1">등록된 품목이 없습니다. 상단 "📦 품목관리"에서 먼저 등록하세요.</p>}
                       </div>
                       <div><label className="block text-slate-300 text-sm mb-2">상품 객단가 / 판매가 (원)</label><input type="number" value={settings.productPrice} onChange={(e) => setSettings({...settings, productPrice: parseInt(e.target.value)})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
-                      <div><label className="block text-slate-300 text-sm mb-2">광고비 (원)</label><input type="number" value={settings.adBudget} onChange={(e) => setSettings({...settings, adBudget: parseInt(e.target.value)})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
                       <div><label className="block text-slate-300 text-sm mb-2">예상 전환율 (%)</label><input type="number" step="0.01" value={settings.expectedConversionRate * 100} onChange={(e) => setSettings({...settings, expectedConversionRate: parseFloat(e.target.value) / 100})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
-                      <div><label className="block text-slate-300 text-sm mb-2">수수료율 (%)</label><input type="number" step="0.01" value={settings.commissionRate * 100} onChange={(e) => setSettings({...settings, commissionRate: parseFloat(e.target.value) / 100})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
 
                       <div className="border-t border-slate-700 pt-4 mt-2">
                         <h4 className="text-slate-200 font-semibold mb-3">💰 손익/BEP 계산용 원가 정보</h4>
@@ -964,11 +960,26 @@ export default function YouTubeAnalyzer() {
                       <div className="border-t border-slate-700 pt-4 mt-2">
                         <h4 className="text-slate-200 font-semibold mb-3">🤝 MG / RS 딜 구조 (쇼크 대행)</h4>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <div><label className="block text-slate-300 text-xs mb-1">총 MG 비용 (원)</label><input type="number" value={settings.totalMG} onChange={(e) => setSettings({...settings, totalMG: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                          <div><label className="block text-slate-300 text-xs mb-1">총 MG 비용 (원) — PPL 총 비용</label><input type="number" value={settings.totalMG} onChange={(e) => setSettings({...settings, totalMG: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
                           <div><label className="block text-slate-300 text-xs mb-1">대행사 MG 분담율 (%)</label><input type="number" step="1" value={settings.agencyMGShareRate * 100} onChange={(e) => setSettings({...settings, agencyMGShareRate: parseFloat(e.target.value) / 100 || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
                           <div><label className="block text-slate-300 text-xs mb-1">RS율 (%, 대행사 지급)</label><input type="number" step="1" value={settings.rsRate * 100} onChange={(e) => setSettings({...settings, rsRate: parseFloat(e.target.value) / 100 || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
                         </div>
                         <p className="text-xs text-slate-500 mt-2">예: 총 MG 1,000만원, RS 20% 합의 시 대행사가 MG의 30%(300만원)를 분담 → 대행사 MG 분담율 30 입력</p>
+                        {(() => {
+                          const preview = calculateBEP(settings);
+                          return (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                              <div className="bg-slate-900/60 border border-slate-700 rounded-lg px-4 py-3">
+                                <p className="text-slate-400 text-xs mb-1">대행사(쇼크) MG 분담금</p>
+                                <p className="text-lg font-bold text-white">{preview.agencyMGShare.toLocaleString()}원</p>
+                              </div>
+                              <div className="bg-slate-900/60 border border-blue-500/40 rounded-lg px-4 py-3">
+                                <p className="text-slate-400 text-xs mb-1">제스파(우리) MG 부담금</p>
+                                <p className="text-lg font-bold text-blue-400">{preview.ourMGShare.toLocaleString()}원</p>
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       <div className="flex gap-4 pt-4"><button onClick={handleSaveSettings} className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded transition font-semibold">저장</button><button onClick={() => setActiveTab('summary')} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded transition">취소</button></div>
