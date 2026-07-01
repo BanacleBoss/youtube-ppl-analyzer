@@ -47,6 +47,11 @@ export default function YouTubeAnalyzer() {
   const [discoverResults, setDiscoverResults] = useState([]);
   const [discovering, setDiscovering] = useState(false);
 
+  // 영상 탭 페이지네이션 + 검색
+  const VIDEOS_PER_PAGE = 50;
+  const [videoPage, setVideoPage] = useState(1);
+  const [videoSearch, setVideoSearch] = useState('');
+
   // 품목 관리
   const [items, setItems] = useState([]);
   const [showItemManager, setShowItemManager] = useState(false);
@@ -57,6 +62,8 @@ export default function YouTubeAnalyzer() {
   const [campaignLogForm, setCampaignLogForm] = useState({ date: '', actualQty: '', actualRevenue: '', note: '' });
 
   useEffect(() => { loadChannels(); loadItems(); }, []);
+  // 탭/채널 변경 시 페이지·검색 초기화
+  useEffect(() => { setVideoPage(1); setVideoSearch(''); }, [activeTab, selectedChannelId]);
 
   // 채널 선택 시 해당 채널의 설정값 로드
   useEffect(() => {
@@ -249,9 +256,7 @@ export default function YouTubeAnalyzer() {
       setError(null);
       const result = await refreshChannel(channelId);
       setChannels(channels.map(ch => ch._id === channelId ? result.channel : ch));
-      if (result.newVideosDetected > 0) {
-        setError(`✓ ${result.newVideosDetected}개의 새 영상이 감지되었습니다`);
-      }
+      setError(`✓ 갱신 완료 — 총 ${result.totalVideos ?? result.channel?.videos?.length ?? 0}개 영상 수집`);
     } catch (err) {
       setError('새로고침 실패: ' + err.message);
     } finally {
@@ -564,6 +569,37 @@ export default function YouTubeAnalyzer() {
       key,
       direction: sortConfig.key === key && sortConfig.direction === 'desc' ? 'asc' : 'desc'
     });
+    setVideoPage(1);
+  };
+
+  // 영상 테이블 페이지네이션 + 검색 헬퍼
+  const getPaginatedVideos = (videos) => {
+    const filtered = videoSearch.trim()
+      ? videos.filter(v => v.title?.toLowerCase().includes(videoSearch.toLowerCase()))
+      : videos;
+    const total = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(total / VIDEOS_PER_PAGE));
+    const safePage = Math.min(videoPage, totalPages);
+    const start = (safePage - 1) * VIDEOS_PER_PAGE;
+    const paged = filtered.slice(start, start + VIDEOS_PER_PAGE);
+    return { paged, total, totalPages, safePage, start };
+  };
+
+  // 페이지네이션 UI 컴포넌트
+  const PaginationBar = ({ total, totalPages, safePage }) => {
+    if (totalPages <= 1) return null;
+    return (
+      <div className="flex items-center justify-between mt-4 pt-3 border-t border-slate-700">
+        <p className="text-xs text-slate-400">총 {total.toLocaleString()}개 중 {((safePage-1)*VIDEOS_PER_PAGE+1).toLocaleString()}~{Math.min(safePage*VIDEOS_PER_PAGE, total).toLocaleString()}번째</p>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setVideoPage(1)} disabled={safePage === 1} className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-30 text-white transition">«</button>
+          <button onClick={() => setVideoPage(p => Math.max(1, p-1))} disabled={safePage === 1} className="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-30 text-white transition">이전</button>
+          <span className="text-xs text-slate-300">{safePage} / {totalPages}</span>
+          <button onClick={() => setVideoPage(p => Math.min(totalPages, p+1))} disabled={safePage === totalPages} className="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-30 text-white transition">다음</button>
+          <button onClick={() => setVideoPage(totalPages)} disabled={safePage === totalPages} className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 disabled:opacity-30 text-white transition">»</button>
+        </div>
+      </div>
+    );
   };
 
   const toggleCompareChannel = (id) => {
@@ -912,7 +948,8 @@ export default function YouTubeAnalyzer() {
                           </div>
                           <span className={`flex-shrink-0 text-xs font-bold px-2 py-0.5 rounded-full border ${badgeColor}`}>{eff.total}점</span>
                         </div>
-                        <p className="text-xs text-slate-500 mb-2.5">롱폼 {filterVideos(channel.videos, 'longform').length} · 미드 {filterVideos(channel.videos, 'mid').length} · 숏폼 {filterVideos(channel.videos, 'shorts').length}</p>
+                        <p className="text-xs text-slate-500 mb-1.5">롱폼 {filterVideos(channel.videos, 'longform').length} · 미드 {filterVideos(channel.videos, 'mid').length} · 숏폼 {filterVideos(channel.videos, 'shorts').length}</p>
+                        {channel.lastUpdated && <p className="text-xs text-slate-600 mb-2">{new Date(channel.lastUpdated).toLocaleDateString('ko-KR', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})} 갱신</p>}
                         <div className="flex gap-1.5">
                           <button onClick={(e) => { e.stopPropagation(); handleRefreshChannel(channel._id); }} disabled={refreshing[channel._id]} className="flex-1 bg-slate-700/80 hover:bg-blue-600 disabled:opacity-50 text-slate-300 hover:text-white text-xs py-1.5 rounded-lg transition flex items-center justify-center gap-1">
                             {refreshing[channel._id] ? <Loader size={11} className="animate-spin" /> : <RefreshCw size={11} />}
@@ -975,66 +1012,28 @@ export default function YouTubeAnalyzer() {
                             </div>
                           </div>
                           <div className="grid grid-cols-2 gap-3">
-                            <div className="bg-black bg-opacity-30 rounded p-3">
-                              <InfoTooltip content="롱폼 최근 10개 기준 평균 인게이지먼트율. PPL 전환에 직결되는 가장 중요한 지표입니다.">
-                                <p className="text-slate-300 text-xs">💬 인게이지먼트율</p>
-                              </InfoTooltip>
-                              <p className="text-xl font-bold text-white mt-1">{d.engRate}%</p>
-                              <div className="flex justify-between items-center mt-1">
-                                <p className="text-xs text-slate-400">{d.engRate >= 5 ? '매우 높음 ✓' : d.engRate >= 3 ? '높음' : d.engRate >= 1.5 ? '보통' : '낮음'}</p>
-                                <p className="text-xs font-bold text-yellow-400">{d.engScore}/35점</p>
+                            {[
+                              { icon:'💬', label:'인게이지먼트율', value:`${d.engRate}%`, score:d.engScore, max:35, tooltip:'롱폼 최근 10개 기준 평균 인게이지먼트율. PPL 전환에 직결되는 가장 중요한 지표입니다.', status: d.engRate >= 5 ? '매우 높음 ✓' : d.engRate >= 3 ? '높음' : d.engRate >= 1.5 ? '보통' : '낮음' },
+                              { icon:'👥', label:'구독자 대비 조회수', value:`${d.viewsRatio}%`, score:d.viewsScore, max:25, tooltip:'최근 10개 영상 평균 조회수 ÷ 구독자 수. 30% 이상이면 충성도 높은 채널입니다.', status: d.viewsRatio >= 30 ? '충성도 높음 ✓' : d.viewsRatio >= 15 ? '보통' : '낮음' },
+                              { icon:'📊', label:'조회수 일관성', value: d.cvPercent !== null ? `CV ${d.cvPercent}%` : '-', score:d.consistencyScore, max:15, tooltip:'조회수 변동계수(CV). 낮을수록 매 영상 조회수가 안정적 — PPL ROI 예측이 쉽습니다.', status: d.cvPercent !== null ? (d.cvPercent <= 30 ? '매우 안정적 ✓' : d.cvPercent <= 60 ? '안정적' : d.cvPercent <= 100 ? '보통' : '불안정') : '-' },
+                              { icon:'📅', label:'업로드 주기 (롱폼)', value: d.avgGapDays !== null ? `${d.avgGapDays}일` : '-', score:d.uploadScore, max:10, tooltip:'최근 롱폼 10개 기준 평균 업로드 간격. 7일 이하면 꾸준히 활동하는 채널입니다.', status: d.avgGapDays !== null ? (d.avgGapDays <= 7 ? '매우 활발 ✓' : d.avgGapDays <= 14 ? '활발' : d.avgGapDays <= 30 ? '보통' : '비활성') : '-' },
+                              { icon:'📢', label:'최근 광고 비율', value:`${d.adRatio}%`, score:d.adScore, max:10, tooltip:'최근 영상 20개 중 광고(isAd) 비율. 낮을수록 PPL 피로도가 낮고 수용도가 높습니다.', status: d.adRatio <= 10 ? 'PPL 친화적 ✓' : d.adRatio <= 25 ? '양호' : d.adRatio <= 40 ? '주의' : '광고 과다' },
+                              { icon:'📆', label:'채널 연령', value: d.channelAgeYears !== null ? `${d.channelAgeYears}년` : '-', score:d.ageScore, max:5, tooltip:'채널 개설 이후 경과 연수. 오래된 채널일수록 신뢰도와 팬덤 안정성이 높습니다.', status: d.channelAgeYears !== null ? (d.channelAgeYears >= 5 ? '신뢰도 높음 ✓' : d.channelAgeYears >= 3 ? '안정적' : d.channelAgeYears >= 1 ? '성장기' : '신규') : '-' },
+                            ].map(item => (
+                              <div key={item.label} className="bg-black bg-opacity-30 rounded p-3">
+                                <InfoTooltip content={item.tooltip}>
+                                  <p className="text-slate-300 text-xs">{item.icon} {item.label}</p>
+                                </InfoTooltip>
+                                <p className="text-xl font-bold text-white mt-1">{item.value}</p>
+                                <div className="flex justify-between items-center mt-1">
+                                  <p className="text-xs text-slate-400">{item.status}</p>
+                                  <p className="text-xs font-bold text-yellow-400">{item.score}/{item.max}점</p>
+                                </div>
+                                <div className="w-full bg-black/40 rounded-full h-1.5 mt-2">
+                                  <div className={`h-1.5 rounded-full transition-all ${item.score/item.max >= 0.8 ? 'bg-green-400' : item.score/item.max >= 0.5 ? 'bg-yellow-400' : 'bg-red-400'}`} style={{width:`${(item.score/item.max)*100}%`}} />
+                                </div>
                               </div>
-                            </div>
-                            <div className="bg-black bg-opacity-30 rounded p-3">
-                              <InfoTooltip content="최근 10개 영상 평균 조회수 ÷ 구독자 수. 30% 이상이면 충성도 높은 채널입니다.">
-                                <p className="text-slate-300 text-xs">👥 구독자 대비 조회수</p>
-                              </InfoTooltip>
-                              <p className="text-xl font-bold text-white mt-1">{d.viewsRatio}%</p>
-                              <div className="flex justify-between items-center mt-1">
-                                <p className="text-xs text-slate-400">{d.viewsRatio >= 30 ? '충성도 높음 ✓' : d.viewsRatio >= 15 ? '보통' : '낮음'}</p>
-                                <p className="text-xs font-bold text-yellow-400">{d.viewsScore}/25점</p>
-                              </div>
-                            </div>
-                            <div className="bg-black bg-opacity-30 rounded p-3">
-                              <InfoTooltip content="조회수 변동계수(CV). 낮을수록 매 영상 조회수가 안정적 — PPL ROI 예측이 쉽습니다.">
-                                <p className="text-slate-300 text-xs">📊 조회수 일관성</p>
-                              </InfoTooltip>
-                              <p className="text-xl font-bold text-white mt-1">{d.cvPercent !== null ? `CV ${d.cvPercent}%` : '-'}</p>
-                              <div className="flex justify-between items-center mt-1">
-                                <p className="text-xs text-slate-400">{d.cvPercent !== null ? (d.cvPercent <= 30 ? '매우 안정적 ✓' : d.cvPercent <= 60 ? '안정적' : d.cvPercent <= 100 ? '보통' : '불안정') : '-'}</p>
-                                <p className="text-xs font-bold text-yellow-400">{d.consistencyScore}/15점</p>
-                              </div>
-                            </div>
-                            <div className="bg-black bg-opacity-30 rounded p-3">
-                              <InfoTooltip content="최근 롱폼 10개 기준 평균 업로드 간격. 7일 이하면 꾸준히 활동하는 채널입니다.">
-                                <p className="text-slate-300 text-xs">📅 업로드 주기 (롱폼)</p>
-                              </InfoTooltip>
-                              <p className="text-xl font-bold text-white mt-1">{d.avgGapDays !== null ? `${d.avgGapDays}일` : '-'}</p>
-                              <div className="flex justify-between items-center mt-1">
-                                <p className="text-xs text-slate-400">{d.avgGapDays !== null ? (d.avgGapDays <= 7 ? '매우 활발 ✓' : d.avgGapDays <= 14 ? '활발' : d.avgGapDays <= 30 ? '보통' : '비활성') : '-'}</p>
-                                <p className="text-xs font-bold text-yellow-400">{d.uploadScore}/10점</p>
-                              </div>
-                            </div>
-                            <div className="bg-black bg-opacity-30 rounded p-3">
-                              <InfoTooltip content="최근 영상 20개 중 광고(isAd) 비율. 낮을수록 PPL 피로도가 낮고 수용도가 높습니다.">
-                                <p className="text-slate-300 text-xs">📢 최근 광고 비율</p>
-                              </InfoTooltip>
-                              <p className="text-xl font-bold text-white mt-1">{d.adRatio}%</p>
-                              <div className="flex justify-between items-center mt-1">
-                                <p className="text-xs text-slate-400">{d.adRatio <= 10 ? 'PPL 친화적 ✓' : d.adRatio <= 25 ? '양호' : d.adRatio <= 40 ? '주의' : '광고 과다'}</p>
-                                <p className="text-xs font-bold text-yellow-400">{d.adScore}/10점</p>
-                              </div>
-                            </div>
-                            <div className="bg-black bg-opacity-30 rounded p-3">
-                              <InfoTooltip content="채널 개설 이후 경과 연수. 오래된 채널일수록 신뢰도와 팬덤 안정성이 높습니다.">
-                                <p className="text-slate-300 text-xs">📆 채널 연령</p>
-                              </InfoTooltip>
-                              <p className="text-xl font-bold text-white mt-1">{d.channelAgeYears !== null ? `${d.channelAgeYears}년` : '-'}</p>
-                              <div className="flex justify-between items-center mt-1">
-                                <p className="text-xs text-slate-400">{d.channelAgeYears !== null ? (d.channelAgeYears >= 5 ? '신뢰도 높음 ✓' : d.channelAgeYears >= 3 ? '안정적' : d.channelAgeYears >= 1 ? '성장기' : '신규') : '-'}</p>
-                                <p className="text-xs font-bold text-yellow-400">{d.ageScore}/5점</p>
-                              </div>
-                            </div>
+                            ))}
                           </div>
                         </div>
                       );
@@ -1204,27 +1203,27 @@ export default function YouTubeAnalyzer() {
                   </div>
                 )}
 
-                {activeTab === 'longform' && (
+                {activeTab === 'longform' && (() => {
+                  const { paged, total, totalPages, safePage, start } = getPaginatedVideos(sortedLongformVideos);
+                  return (
                   <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-                    <h3 className="text-lg font-bold text-white mb-4">🎬 롱폼 분석 (10분↑) — {sortedLongformVideos.length}개</h3>
-                    {sortedLongformVideos.length > 0 ? (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                      <h3 className="text-lg font-bold text-white">🎬 롱폼 분석 (10분↑) — {sortedLongformVideos.length}개</h3>
+                      <input type="text" value={videoSearch} onChange={e => { setVideoSearch(e.target.value); setVideoPage(1); }} placeholder="🔎 제목 검색..." className="w-full sm:w-56 bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" />
+                    </div>
+                    {paged.length > 0 ? (
+                      <>
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm">
                           <thead className="border-b border-slate-600"><tr className="text-slate-300"><th className="text-left p-2">영상</th><th className="text-right p-2 cursor-pointer hover:text-blue-400" onClick={() => handleSort('views')}>조회수 <SortIcon column="views" /></th><th className="text-right p-2 cursor-pointer hover:text-blue-400" onClick={() => handleSort('likes')}>좋아요 <SortIcon column="likes" /></th><th className="text-right p-2 cursor-pointer hover:text-blue-400" onClick={() => handleSort('comments')}>댓글 <SortIcon column="comments" /></th><th className="text-right p-2">인게이지</th><th className="text-right p-2 cursor-pointer hover:text-blue-400" onClick={() => handleSort('uploadDate')}>업로드 <SortIcon column="uploadDate" /></th><th className="text-center p-2">링크</th></tr></thead>
                           <tbody>
-                            {sortedLongformVideos?.map((video, idx) => (
-                              <tr key={idx} className="border-b border-slate-700 hover:bg-slate-700 transition">
+                            {paged.map((video, idx) => (
+                              <tr key={video.videoId || idx} className="border-b border-slate-700 hover:bg-slate-700 transition">
                                 <td className="p-2 text-slate-300 max-w-xs">
                                   <div className="flex items-center gap-1.5">
-                                    <span className="truncate">{idx + 1}. {video.title}</span>
-                                    {video.isAd && (
-                                      <span
-                                        className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40"
-                                        title={video.hasPaidPromotion ? 'YouTube 공식 유료 프로모션 표기' : '설명란에서 광고/협찬 문구 감지'}
-                                      >
-                                        광고
-                                      </span>
-                                    )}
+                                    <span className="truncate text-slate-400 shrink-0 text-xs w-6">{start+idx+1}.</span>
+                                    <span className="truncate">{video.title}</span>
+                                    {video.isAd && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40" title={video.hasPaidPromotion ? 'YouTube 공식 유료 프로모션 표기' : '설명란에서 광고/협찬 문구 감지'}>광고</span>}
                                   </div>
                                 </td>
                                 <td className="text-right p-2 text-white font-semibold">{(video.views/1000).toFixed(0)}K</td>
@@ -1238,33 +1237,36 @@ export default function YouTubeAnalyzer() {
                           </tbody>
                         </table>
                       </div>
+                      <PaginationBar total={total} totalPages={totalPages} safePage={safePage} />
+                      </>
                     ) : (
-                      <p className="text-slate-400 text-center py-8">롱폼 영상이 없습니다</p>
+                      <p className="text-slate-400 text-center py-8">{videoSearch ? '검색 결과가 없습니다' : '롱폼 영상이 없습니다'}</p>
                     )}
                   </div>
-                )}
+                  );
+                })()}
 
-                {activeTab === 'mid' && (
+                {activeTab === 'mid' && (() => {
+                  const { paged, total, totalPages, safePage, start } = getPaginatedVideos(sortedMidVideos);
+                  return (
                   <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-                    <h3 className="text-lg font-bold text-white mb-4">▶️ 미드폼 분석 (1~10분) — {sortedMidVideos.length}개</h3>
-                    {sortedMidVideos.length > 0 ? (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                      <h3 className="text-lg font-bold text-white">▶️ 미드폼 분석 (1~10분) — {sortedMidVideos.length}개</h3>
+                      <input type="text" value={videoSearch} onChange={e => { setVideoSearch(e.target.value); setVideoPage(1); }} placeholder="🔎 제목 검색..." className="w-full sm:w-56 bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" />
+                    </div>
+                    {paged.length > 0 ? (
+                      <>
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm">
                           <thead className="border-b border-slate-600"><tr className="text-slate-300"><th className="text-left p-2">영상</th><th className="text-right p-2 cursor-pointer hover:text-blue-400" onClick={() => handleSort('views')}>조회수 <SortIcon column="views" /></th><th className="text-right p-2 cursor-pointer hover:text-blue-400" onClick={() => handleSort('likes')}>좋아요 <SortIcon column="likes" /></th><th className="text-right p-2 cursor-pointer hover:text-blue-400" onClick={() => handleSort('comments')}>댓글 <SortIcon column="comments" /></th><th className="text-right p-2">인게이지</th><th className="text-right p-2 cursor-pointer hover:text-blue-400" onClick={() => handleSort('uploadDate')}>업로드 <SortIcon column="uploadDate" /></th><th className="text-center p-2">링크</th></tr></thead>
                           <tbody>
-                            {sortedMidVideos.map((video, idx) => (
-                              <tr key={idx} className="border-b border-slate-700 hover:bg-slate-700 transition">
+                            {paged.map((video, idx) => (
+                              <tr key={video.videoId || idx} className="border-b border-slate-700 hover:bg-slate-700 transition">
                                 <td className="p-2 text-slate-300 max-w-xs">
                                   <div className="flex items-center gap-1.5">
-                                    <span className="truncate">{idx + 1}. {video.title}</span>
-                                    {video.isAd && (
-                                      <span
-                                        className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40"
-                                        title={video.hasPaidPromotion ? 'YouTube 공식 유료 프로모션 표기' : '설명란에서 광고/협찬 문구 감지'}
-                                      >
-                                        광고
-                                      </span>
-                                    )}
+                                    <span className="truncate text-slate-400 shrink-0 text-xs w-6">{start+idx+1}.</span>
+                                    <span className="truncate">{video.title}</span>
+                                    {video.isAd && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40">광고</span>}
                                   </div>
                                 </td>
                                 <td className="text-right p-2 text-white font-semibold">{(video.views/1000).toFixed(0)}K</td>
@@ -1278,33 +1280,36 @@ export default function YouTubeAnalyzer() {
                           </tbody>
                         </table>
                       </div>
+                      <PaginationBar total={total} totalPages={totalPages} safePage={safePage} />
+                      </>
                     ) : (
-                      <p className="text-slate-400 text-center py-8">미드폼 영상이 없습니다</p>
+                      <p className="text-slate-400 text-center py-8">{videoSearch ? '검색 결과가 없습니다' : '미드폼 영상이 없습니다'}</p>
                     )}
                   </div>
-                )}
+                  );
+                })()}
 
-                {activeTab === 'shorts' && (
+                {activeTab === 'shorts' && (() => {
+                  const { paged, total, totalPages, safePage, start } = getPaginatedVideos(sortedShortsVideos);
+                  return (
                   <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-                    <h3 className="text-lg font-bold text-white mb-4">📱 숏폼 분석 (60초↓) — {sortedShortsVideos.length}개</h3>
-                    {sortedShortsVideos.length > 0 ? (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                      <h3 className="text-lg font-bold text-white">📱 숏폼 분석 (60초↓) — {sortedShortsVideos.length}개</h3>
+                      <input type="text" value={videoSearch} onChange={e => { setVideoSearch(e.target.value); setVideoPage(1); }} placeholder="🔎 제목 검색..." className="w-full sm:w-56 bg-slate-700 border border-slate-600 rounded px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" />
+                    </div>
+                    {paged.length > 0 ? (
+                      <>
                       <div className="overflow-x-auto">
                         <table className="w-full text-sm">
                           <thead className="border-b border-slate-600"><tr className="text-slate-300"><th className="text-left p-2">영상</th><th className="text-right p-2 cursor-pointer hover:text-blue-400" onClick={() => handleSort('views')}>조회수 <SortIcon column="views" /></th><th className="text-right p-2 cursor-pointer hover:text-blue-400" onClick={() => handleSort('likes')}>좋아요 <SortIcon column="likes" /></th><th className="text-right p-2 cursor-pointer hover:text-blue-400" onClick={() => handleSort('comments')}>댓글 <SortIcon column="comments" /></th><th className="text-right p-2">인게이지</th><th className="text-right p-2 cursor-pointer hover:text-blue-400" onClick={() => handleSort('uploadDate')}>업로드 <SortIcon column="uploadDate" /></th><th className="text-center p-2">링크</th></tr></thead>
                           <tbody>
-                            {sortedShortsVideos?.map((video, idx) => (
-                              <tr key={idx} className="border-b border-slate-700 hover:bg-slate-700 transition">
+                            {paged.map((video, idx) => (
+                              <tr key={video.videoId || idx} className="border-b border-slate-700 hover:bg-slate-700 transition">
                                 <td className="p-2 text-slate-300 max-w-xs">
                                   <div className="flex items-center gap-1.5">
-                                    <span className="truncate">{idx + 1}. {video.title}</span>
-                                    {video.isAd && (
-                                      <span
-                                        className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40"
-                                        title={video.hasPaidPromotion ? 'YouTube 공식 유료 프로모션 표기' : '설명란에서 광고/협찬 문구 감지'}
-                                      >
-                                        광고
-                                      </span>
-                                    )}
+                                    <span className="truncate text-slate-400 shrink-0 text-xs w-6">{start+idx+1}.</span>
+                                    <span className="truncate">{video.title}</span>
+                                    {video.isAd && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40">광고</span>}
                                   </div>
                                 </td>
                                 <td className="text-right p-2 text-white font-semibold">{(video.views/1000).toFixed(0)}K</td>
@@ -1318,11 +1323,14 @@ export default function YouTubeAnalyzer() {
                           </tbody>
                         </table>
                       </div>
+                      <PaginationBar total={total} totalPages={totalPages} safePage={safePage} />
+                      </>
                     ) : (
-                      <p className="text-slate-400 text-center py-8">숏폼 영상이 없습니다</p>
+                      <p className="text-slate-400 text-center py-8">{videoSearch ? '검색 결과가 없습니다' : '숏폼 영상이 없습니다'}</p>
                     )}
                   </div>
-                )}
+                  );
+                })()}
 
                 {activeTab === 'settings' && (
                   <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
