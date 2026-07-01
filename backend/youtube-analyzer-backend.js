@@ -1087,11 +1087,15 @@ app.get('/api/search', async (req, res) => {
 
 // 자동 스케줄링
 async function setupScheduling() {
-  schedule.scheduleJob('0 1 * * *', async () => {
-    console.log('[스케줄] 일일 자동 업데이트 시작...');
+  // 매일 KST 03:00 (UTC 18:00) 자동 갱신
+  schedule.scheduleJob('0 18 * * *', async () => {
+    console.log('[스케줄] 일일 자동 갱신 시작 (KST 03:00)');
     try {
       const channels = await Channel.find();
+      console.log(`[스케줄] 총 ${channels.length}개 채널 갱신 예정`);
       for (const channel of channels) {
+        // 채널 간 5초 딜레이 — YouTube API 쿼터 보호
+        await new Promise(res => setTimeout(res, 5000));
         try {
           const videos = await analyzer.getChannelVideos(channel.channelId);
           channel.videos = videos;
@@ -1112,17 +1116,18 @@ async function setupScheduling() {
           }
 
           await channel.save();
-          console.log(`✓ ${channel.channelName} 업데이트 완료`);
+          console.log(`[스케줄] ✓ ${channel.channelName} 갱신 완료 (${videos.length}개 영상)`);
         } catch (error) {
-          console.error(`✗ ${channel.channelName} 실패:`, error.message);
+          console.error(`[스케줄] ✗ ${channel.channelName} 실패:`, error.message);
         }
       }
+      console.log('[스케줄] 일일 자동 갱신 완료');
     } catch (error) {
       console.error('[스케줄] 오류:', error.message);
     }
   });
 
-  console.log('✓ 자동 스케줄링 설정 완료');
+  console.log('✓ 자동 스케줄링 설정 완료 (매일 KST 03:00 갱신)');
 }
 
 async function startServer() {
