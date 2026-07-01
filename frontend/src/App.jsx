@@ -258,7 +258,7 @@ export default function YouTubeAnalyzer() {
       const results = await searchChannels(discoverKeyword.trim());
       setDiscoverResults(results);
     } catch (err) {
-      setError('채널 검색 실패: ' + err.message);
+      setError('채널 검색 실패: ' + (err.response?.data?.error || err.message));
     } finally {
       setDiscovering(false);
     }

@@ -8,11 +8,16 @@ require('dotenv').config();
 
 // 일부 네트워크(ISP/방화벽)에서 mongodb+srv의 DNS SRV 조회가 차단되는 경우가 있어
 // Node의 DNS 리졸버를 명시적으로 지정해 우회한다.
+// 단, Render 같은 클라우드 호스팅 환경은 자체 네트워크 구성상 외부 DNS(8.8.8.8 등)로의
+// 접근이 막혀 있을 수 있고, 이 경우 오히려 모든 외부 API 호출(유튜브 등)이 실패하게 되므로
+// 로컬 개발 환경에서만 적용한다.
 const dns = require('dns');
-try {
-  dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
-} catch (e) {
-  console.warn('DNS 서버 설정 실패:', e.message);
+if (!process.env.RENDER) {
+  try {
+    dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+  } catch (e) {
+    console.warn('DNS 서버 설정 실패:', e.message);
+  }
 }
 
 const app = express();
