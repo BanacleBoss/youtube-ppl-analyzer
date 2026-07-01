@@ -353,7 +353,7 @@ class YouTubeAnalyzer {
     }
   }
 
-  async getChannelVideos(channelId, maxResults = 30) {
+  async getChannelVideos(channelId) {
     try {
       const channelResponse = await axios.get(`${this.baseURL}/channels`, {
         params: {
@@ -365,16 +365,21 @@ class YouTubeAnalyzer {
 
       const uploadPlaylistId = channelResponse.data.items[0].contentDetails.relatedPlaylists.uploads;
 
-      const playlistResponse = await axios.get(`${this.baseURL}/playlistItems`, {
-        params: {
+      // 전체 영상 ID 수집 (nextPageToken으로 페이지네이션)
+      const videoIds = [];
+      let pageToken = undefined;
+      do {
+        const params = {
           part: 'contentDetails',
           playlistId: uploadPlaylistId,
-          maxResults: maxResults,
+          maxResults: 50,
           key: this.apiKey
-        }
-      });
-
-      const videoIds = playlistResponse.data.items.map(item => item.contentDetails.videoId);
+        };
+        if (pageToken) params.pageToken = pageToken;
+        const playlistResponse = await axios.get(`${this.baseURL}/playlistItems`, { params });
+        playlistResponse.data.items.forEach(item => videoIds.push(item.contentDetails.videoId));
+        pageToken = playlistResponse.data.nextPageToken;
+      } while (pageToken);
 
       const videos = [];
       for (let i = 0; i < videoIds.length; i += 50) {

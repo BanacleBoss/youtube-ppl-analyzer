@@ -846,7 +846,7 @@ export default function YouTubeAnalyzer() {
               <div className="flex gap-3">
                 <button onClick={handleAddChannel} disabled={loading} className="flex-1 sm:flex-none justify-center bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white px-6 py-3 rounded transition flex items-center gap-2">
                   {loading ? <Loader size={16} className="animate-spin" /> : <Plus size={16} />}
-                  {loading ? '추가중...' : '추가'}
+                  {loading ? '수집 중 (영상 많으면 1~2분 소요)...' : '추가'}
                 </button>
                 <button onClick={() => setShowAddForm(false)} className="flex-1 sm:flex-none bg-slate-700 hover:bg-slate-600 text-white px-6 py-3 rounded transition" disabled={loading}>닫기</button>
               </div>
