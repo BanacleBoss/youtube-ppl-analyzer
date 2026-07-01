@@ -429,6 +429,78 @@ export default function YouTubeAnalyzer() {
     };
   };
 
+  // 효율 점수 계산 (0~100점)
+  // 구독자 대비 조회수 비율 25점 + 업로드 주기 25점 + 인게이지먼트 25점 + 롱폼 비율 25점
+  const calculateEfficiencyScore = (channel) => {
+    const videos = channel?.videos || [];
+    const subscribers = channel?.subscribers || 0;
+    const allVideos = videos.length;
+    const lf = filterVideos(videos, 'longform');
+    const mid = filterVideos(videos, 'mid');
+
+    // 1. 구독자 대비 조회수 비율
+    const sorted = [...videos].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
+    const recentAvgViews = sorted.slice(0, 10).reduce((s, v) => s + (v.views || 0), 0) / Math.max(sorted.slice(0, 10).length, 1);
+    const viewsRatio = subscribers > 0 ? (recentAvgViews / subscribers) * 100 : 0;
+    let viewsScore = 5;
+    if (viewsRatio >= 30) viewsScore = 25;
+    else if (viewsRatio >= 15) viewsScore = 20;
+    else if (viewsRatio >= 5) viewsScore = 13;
+
+    // 2. 업로드 주기 (최근 10개 영상 간격 평균)
+    let uploadScore = 5;
+    const recentDates = sorted.slice(0, 10).map(v => new Date(v.uploadDate)).filter(d => !isNaN(d));
+    if (recentDates.length >= 2) {
+      let totalGap = 0;
+      for (let i = 0; i < recentDates.length - 1; i++) {
+        totalGap += (recentDates[i] - recentDates[i + 1]) / (1000 * 60 * 60 * 24);
+      }
+      const avgGapDays = totalGap / (recentDates.length - 1);
+      if (avgGapDays <= 7) uploadScore = 25;
+      else if (avgGapDays <= 14) uploadScore = 20;
+      else if (avgGapDays <= 30) uploadScore = 12;
+    }
+
+    // 3. 인게이지먼트율
+    const recentLF = lf.slice(0, 10);
+    const engRate = recentLF.length > 0
+      ? recentLF.reduce((s, v) => s + (parseFloat(v.engagement) || 0), 0) / recentLF.length
+      : 0;
+    let engScore = 5;
+    if (engRate >= 5) engScore = 25;
+    else if (engRate >= 3) engScore = 18;
+    else if (engRate >= 1) engScore = 10;
+
+    // 4. 롱폼 비율
+    const longformRatio = allVideos > 0 ? ((lf.length + mid.length > 0 ? lf.length / (lf.length + mid.length) : 0) * 100) : 0;
+    let lfScore = 5;
+    if (longformRatio >= 50) lfScore = 25;
+    else if (longformRatio >= 30) lfScore = 18;
+    else if (longformRatio >= 10) lfScore = 10;
+
+    const total = viewsScore + uploadScore + engScore + lfScore;
+    const avgGapDays = (() => {
+      if (recentDates.length < 2) return null;
+      let totalGap = 0;
+      for (let i = 0; i < recentDates.length - 1; i++) totalGap += (recentDates[i] - recentDates[i + 1]) / (1000 * 60 * 60 * 24);
+      return Math.round(totalGap / (recentDates.length - 1));
+    })();
+
+    return {
+      total,
+      details: {
+        viewsRatio: viewsRatio.toFixed(1),
+        viewsScore,
+        avgGapDays,
+        uploadScore,
+        engRate: engRate.toFixed(2),
+        engScore,
+        longformRatio: longformRatio.toFixed(1),
+        lfScore
+      }
+    };
+  };
+
   const getSortedVideos = (videos) => {
     const sorted = [...(videos || [])].sort((a, b) => {
       let aVal, bVal;
@@ -725,6 +797,74 @@ export default function YouTubeAnalyzer() {
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">구독자</p><p className="text-2xl font-bold text-white mt-1">{(selectedChannel.subscribers / 1000000).toFixed(1)}M</p></div>
                       <div className="bg-slate-700 rounded p-4"><InfoTooltip content="= (좋아요 + 댓글) / 조회수 × 100%"><p className="text-slate-400 text-sm">인게이지먼트</p><p className="text-2xl font-bold text-white mt-1">{pplData.engagement}%</p></InfoTooltip></div>
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">평균 조회수</p><p className="text-2xl font-bold text-white mt-1">{(pplData.avgViews/1000).toFixed(0)}K</p></div>
+                    </div>
+
+                    {/* 효율 점수 카드 */}
+                    {(() => {
+                      const eff = calculateEfficiencyScore(selectedChannel);
+                      const d = eff.details;
+                      const scoreColor = eff.total >= 75 ? 'text-green-400' : eff.total >= 50 ? 'text-yellow-400' : 'text-red-400';
+                      const scoreBg = eff.total >= 75 ? 'from-green-900 to-green-800 border-green-600' : eff.total >= 50 ? 'from-yellow-900 to-yellow-800 border-yellow-600' : 'from-red-900 to-red-800 border-red-600';
+                      const grade = eff.total >= 75 ? '✅ PPL 적합' : eff.total >= 50 ? '⚠️ 검토 필요' : '❌ 비적합';
+                      return (
+                        <div className={`bg-gradient-to-br ${scoreBg} border rounded-lg p-5 mb-6`}>
+                          <div className="flex items-center justify-between mb-4">
+                            <div>
+                              <h3 className="text-lg font-bold text-white">⚡ 채널 효율 점수</h3>
+                              <p className="text-xs text-slate-400 mt-0.5">구독자대비조회수 · 업로드주기 · 인게이지먼트 · 롱폼비율</p>
+                            </div>
+                            <div className="text-center">
+                              <p className={`text-4xl font-bold ${scoreColor}`}>{eff.total}<span className="text-lg">점</span></p>
+                              <p className={`text-sm font-semibold mt-1 ${scoreColor}`}>{grade}</p>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="bg-black bg-opacity-30 rounded p-3">
+                              <InfoTooltip content="최근 10개 영상 평균 조회수 ÷ 구독자 수. 30% 이상이면 충성도 높은 채널입니다.">
+                                <p className="text-slate-300 text-xs">👥 구독자 대비 조회수</p>
+                              </InfoTooltip>
+                              <p className="text-xl font-bold text-white mt-1">{d.viewsRatio}%</p>
+                              <div className="flex justify-between items-center mt-1">
+                                <p className="text-xs text-slate-400">{d.viewsRatio >= 30 ? '충성도 높음 ✓' : d.viewsRatio >= 15 ? '보통' : '낮음'}</p>
+                                <p className="text-xs font-bold text-yellow-400">{d.viewsScore}/25점</p>
+                              </div>
+                            </div>
+                            <div className="bg-black bg-opacity-30 rounded p-3">
+                              <InfoTooltip content="최근 10개 영상 사이의 평균 업로드 간격. 7일 이하면 꾸준한 활동 채널입니다.">
+                                <p className="text-slate-300 text-xs">📅 평균 업로드 주기</p>
+                              </InfoTooltip>
+                              <p className="text-xl font-bold text-white mt-1">{d.avgGapDays !== null ? `${d.avgGapDays}일` : '-'}</p>
+                              <div className="flex justify-between items-center mt-1">
+                                <p className="text-xs text-slate-400">{d.avgGapDays !== null ? (d.avgGapDays <= 7 ? '매우 활발 ✓' : d.avgGapDays <= 14 ? '활발' : d.avgGapDays <= 30 ? '보통' : '비활성') : '-'}</p>
+                                <p className="text-xs font-bold text-yellow-400">{d.uploadScore}/25점</p>
+                              </div>
+                            </div>
+                            <div className="bg-black bg-opacity-30 rounded p-3">
+                              <InfoTooltip content="롱폼 최근 10개 기준 평균 인게이지먼트율. 5% 이상이면 반응이 매우 좋은 채널입니다.">
+                                <p className="text-slate-300 text-xs">💬 인게이지먼트율</p>
+                              </InfoTooltip>
+                              <p className="text-xl font-bold text-white mt-1">{d.engRate}%</p>
+                              <div className="flex justify-between items-center mt-1">
+                                <p className="text-xs text-slate-400">{d.engRate >= 5 ? '매우 높음 ✓' : d.engRate >= 3 ? '높음' : d.engRate >= 1 ? '보통' : '낮음'}</p>
+                                <p className="text-xs font-bold text-yellow-400">{d.engScore}/25점</p>
+                              </div>
+                            </div>
+                            <div className="bg-black bg-opacity-30 rounded p-3">
+                              <InfoTooltip content="롱폼(10분↑) ÷ (롱폼+미드폼) 비율. PPL은 롱폼에서 효과가 높습니다.">
+                                <p className="text-slate-300 text-xs">🎬 롱폼 비율</p>
+                              </InfoTooltip>
+                              <p className="text-xl font-bold text-white mt-1">{d.longformRatio}%</p>
+                              <div className="flex justify-between items-center mt-1">
+                                <p className="text-xs text-slate-400">{d.longformRatio >= 50 ? 'PPL 최적 ✓' : d.longformRatio >= 30 ? '적합' : '낮음'}</p>
+                                <p className="text-xs font-bold text-yellow-400">{d.lfScore}/25점</p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    <div className="grid grid-cols-2 gap-4 mb-6">
                       <div className="bg-slate-700 rounded p-4"><InfoTooltip content="= 총 MG 비용 ÷ 평균 조회수. 조회수 1회를 만드는 데 든 비용"><p className="text-slate-400 text-sm">CPV(조회수당 비용)</p></InfoTooltip><p className="text-2xl font-bold text-white mt-1">{pplData.cpv !== null && pplData.cpv !== undefined ? `${pplData.cpv.toLocaleString()}원` : '계산 불가'}</p></div>
                       <div className="bg-slate-700 rounded p-4"><InfoTooltip content="= 예상 클릭수 ÷ 평균 조회수 × 100%. 설정 탭에서 예상 클릭수를 입력하면 계산됩니다"><p className="text-slate-400 text-sm">예상 클릭률</p></InfoTooltip><p className="text-2xl font-bold text-white mt-1">{pplData.clickRate !== null && pplData.clickRate !== undefined ? `${pplData.clickRate}%` : '계산 불가'}</p></div>
                     </div>
