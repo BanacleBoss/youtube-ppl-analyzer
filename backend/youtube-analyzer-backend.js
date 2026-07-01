@@ -919,7 +919,9 @@ app.get('/api/search', async (req, res) => {
     results.sort((a, b) => b.pplScore - a.pplScore);
     res.json(results);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    const detail = error.response?.data?.error?.message || error.message;
+    console.error('[검색 실패]', detail, error.response?.data || '');
+    res.status(500).json({ error: detail });
   }
 });
 
