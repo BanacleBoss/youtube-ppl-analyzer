@@ -58,4 +58,15 @@ export const deleteItem = async (itemId) => {
   return response.data;
 };
 
+// 캠페인 실적 기록
+export const addCampaignLog = async (channelId, log) => {
+  const response = await api.post(`/channels/${channelId}/campaign-logs`, log);
+  return response.data;
+};
+
+export const deleteCampaignLog = async (channelId, logId) => {
+  const response = await api.delete(`/channels/${channelId}/campaign-logs/${logId}`);
+  return response.data;
+};
+
 export default api;

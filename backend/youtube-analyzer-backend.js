@@ -3,8 +3,20 @@ const axios = require('axios');
 const schedule = require('node-schedule');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 const ExcelJS = require('exceljs');
 require('dotenv').config();
+
+// 필수 환경변수 누락 시 서버가 원인 불명의 에러로 조용히 실패하는 대신 명확히 알린다.
+const REQUIRED_ENV_VARS = ['YOUTUBE_API_KEY', 'MONGODB_URI'];
+const missingEnvVars = REQUIRED_ENV_VARS.filter(key => !process.env[key]);
+if (missingEnvVars.length > 0) {
+  console.error('========================================');
+  console.error(`[시작 오류] 필수 환경변수가 설정되지 않았습니다: ${missingEnvVars.join(', ')}`);
+  console.error('로컬: backend/.env 파일을 확인하세요.');
+  console.error('배포(Render): 대시보드 → Environment 탭을 확인하세요.');
+  console.error('========================================');
+}
 
 // 일부 네트워크(ISP/방화벽)에서 mongodb+srv의 DNS SRV 조회가 차단되는 경우가 있어
 // Node의 DNS 리졸버를 명시적으로 지정해 우회한다.
@@ -21,8 +33,48 @@ if (!process.env.RENDER) {
 }
 
 const app = express();
-app.use(cors());
+
+// CORS_ORIGIN 환경변수(쉼표로 여러 개 구분 가능)가 설정되어 있으면 해당 origin만 허용하고,
+// 설정되어 있지 않으면 기존과 동일하게 모든 origin을 허용한다(하위 호환, 미설정 시 동작 변화 없음).
+const allowedOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+app.use(cors(allowedOrigins.length > 0 ? {
+  origin: (origin, callback) => {
+    // origin 헤더가 없는 요청(서버-투-서버, 헬스체크, curl 등)은 허용
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    console.warn(`[CORS 차단] 허용되지 않은 origin: ${origin}`);
+    return callback(new Error('CORS 정책에 의해 차단되었습니다'));
+  }
+} : {}));
 app.use(express.json());
+
+// 이 API는 별도 로그인/인증이 없는 공개 URL이므로, 유튜브 API 쿼터 소진이나 무분별한 트래픽으로부터
+// 보호하기 위해 기본적인 요청 속도 제한을 둔다.
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15분
+  max: 300,                 // IP당 15분에 300회
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.' }
+});
+app.use('/api/', generalLimiter);
+
+// 채널 검색(발굴)은 호출 1회당 유튜브 API 쿼터를 100~150 유닛가량 소모하므로 더 엄격하게 제한한다.
+const searchLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10분
+  max: 10,                  // IP당 10분에 10회
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '검색 요청이 너무 많습니다. 잠시 후 다시 시도해주세요 (유튜브 API 쿼터 보호).' }
+});
+app.use('/api/search', searchLimiter);
+
+// 동일 키워드 반복 검색 시 유튜브 API 쿼터를 아끼기 위한 짧은 캐시(10분)
+const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const searchCache = new Map();
 
 const channelSchema = new mongoose.Schema({
   channelId: String,
@@ -33,11 +85,8 @@ const channelSchema = new mongoose.Schema({
   // PPL 설정
   pplSettings: {
     productPrice: { type: Number, default: 50000 },
-    adBudget: { type: Number, default: 1000000 },
     expectedClicks: { type: Number, default: 0 },       // 예상 클릭수 (영상→구매페이지 유입 예상치)
     expectedConversionRate: { type: Number, default: 0.03 },
-    commissionRate: { type: Number, default: 0.1 },
-    targetROI: { type: Number, default: 3 },
 
     // 품목/손익 관련 (BEP 계산용)
     itemId: { type: mongoose.Schema.Types.ObjectId, ref: 'Item', default: null },
@@ -86,7 +135,19 @@ const channelSchema = new mongoose.Schema({
     avgViews: Number,
     predictedRevenue: Number
   }],
-  
+
+  // PPL 캠페인 실적 기록 — 캠페인 종료 후 실제 판매수량/매출을 입력해두면
+  // 예상치(예상 클릭수 × 전환율)와 비교해 다음 캠페인의 전환율 추정 정확도를 높이는 데 참고할 수 있다.
+  campaignLogs: [{
+    date: { type: String, required: true },        // 집계 기준일 (YYYY-MM-DD)
+    actualQty: { type: Number, default: 0 },        // 실제 판매수량
+    actualRevenue: { type: Number, default: 0 },    // 실제 매출
+    expectedQtySnapshot: { type: Number, default: null },   // 기록 당시 예상 판매수량 (비교용 스냅샷)
+    expectedClicksSnapshot: { type: Number, default: null }, // 기록 당시 예상 클릭수 (비교용 스냅샷)
+    note: { type: String, default: '' },
+    createdAt: { type: Date, default: Date.now }
+  }],
+
   country: String,
   channelKeywords: [String],
   channelPublishedAt: Date,
@@ -222,6 +283,14 @@ function detectSponsorKeyword(description) {
   if (!description) return false;
   const lower = description.toLowerCase();
   return SPONSOR_KEYWORDS.some(kw => lower.includes(kw.toLowerCase()));
+}
+
+// 가격/비용/비율 등 입력값 검증: 숫자가 아니거나 음수면 기본값으로 대체 (음수 가격, NaN 등 잘못된 값이
+// DB에 저장되어 손익 계산이 깨지는 것을 방지)
+function toNonNegativeNumber(value, fallback = 0) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return n;
 }
 
 class YouTubeAnalyzer {
@@ -369,32 +438,18 @@ class YouTubeAnalyzer {
     return (totalEngagement / videos.length * 100).toFixed(2);
   }
 
-  calculatePPLRevenue(videos, settings) {
-    const engagement = parseFloat(this.calculateEngagement(videos)) / 100;
-    const avgViews = videos.reduce((sum, v) => sum + v.views, 0) / videos.length;
-    
-    const expectedRevenue = avgViews * engagement * settings.expectedConversionRate * settings.productPrice;
-    const commission = expectedRevenue * settings.commissionRate;
-    const netProfit = expectedRevenue - commission - settings.adBudget;
-    const roi = (netProfit / settings.adBudget * 100).toFixed(2);
-    
-    let riskLevel = '높음';
-    if (roi > 200 && engagement > 0.05) riskLevel = '낮음';
-    else if (roi > 100 && engagement > 0.02) riskLevel = '중간';
-
-    return {
-      avgViews: Math.round(avgViews),
-      engagement: engagement.toFixed(4),
-      expectedRevenue: Math.round(expectedRevenue),
-      commission: Math.round(commission),
-      netProfit: Math.round(netProfit),
-      roi: parseFloat(roi),
-      riskLevel: riskLevel
-    };
-  }
 }
 
 const analyzer = new YouTubeAnalyzer(process.env.YOUTUBE_API_KEY);
+
+// :id 라우트 파라미터 공통 검증 — 잘못된 형식의 ObjectId가 들어오면
+// Mongoose CastError로 인해 알 수 없는 500 에러가 나가는 것을 방지하고 400으로 명확히 응답한다.
+app.param('id', (req, res, next, id) => {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ error: '잘못된 ID 형식입니다' });
+  }
+  next();
+});
 
 // POST: 채널 추가
 app.post('/api/channels', async (req, res) => {
@@ -411,10 +466,8 @@ app.post('/api/channels', async (req, res) => {
 
     const pplData = calculatePPLSummary(videos, {
       productPrice: 50000,
-      adBudget: 1000000,
       expectedClicks: 0,
       expectedConversionRate: 0.03,
-      commissionRate: 0.1,
       cost: 0, shippingCost: 0, giftCost: 0, pgFeeRate: 0.0385,
       totalMG: 0, agencyMGShareRate: 0.3, rsRate: 0.2
     });
@@ -430,11 +483,8 @@ app.post('/api/channels', async (req, res) => {
       videoCount: channelInfo.videoCount,
       pplSettings: {
         productPrice: 50000,
-        adBudget: 1000000,
         expectedClicks: 0,
-        expectedConversionRate: 0.03,
-        commissionRate: 0.1,
-        targetROI: 3
+        expectedConversionRate: 0.03
       },
       videos,
       dailyStats: [{
@@ -552,23 +602,20 @@ app.post('/api/channels/:id/settings', async (req, res) => {
     }
 
     channel.pplSettings = {
-      productPrice: req.body.productPrice || 50000,
-      adBudget: req.body.adBudget || 1000000,
-      expectedClicks: req.body.expectedClicks || 0,
-      expectedConversionRate: req.body.expectedConversionRate || 0.03,
-      commissionRate: req.body.commissionRate || 0.1,
-      targetROI: req.body.targetROI || 3,
+      productPrice: toNonNegativeNumber(req.body.productPrice, 50000),
+      expectedClicks: toNonNegativeNumber(req.body.expectedClicks, 0),
+      expectedConversionRate: toNonNegativeNumber(req.body.expectedConversionRate, 0.03),
 
       itemId: req.body.itemId || null,
       itemName: req.body.itemName || '',
-      cost: req.body.cost || 0,
-      shippingCost: req.body.shippingCost || 0,
-      giftCost: req.body.giftCost || 0,
-      pgFeeRate: req.body.pgFeeRate ?? 0.0385,
+      cost: toNonNegativeNumber(req.body.cost, 0),
+      shippingCost: toNonNegativeNumber(req.body.shippingCost, 0),
+      giftCost: toNonNegativeNumber(req.body.giftCost, 0),
+      pgFeeRate: toNonNegativeNumber(req.body.pgFeeRate, 0.0385),
 
-      totalMG: req.body.totalMG || 0,
-      agencyMGShareRate: req.body.agencyMGShareRate ?? 0.3,
-      rsRate: req.body.rsRate ?? 0.2
+      totalMG: toNonNegativeNumber(req.body.totalMG, 0),
+      agencyMGShareRate: toNonNegativeNumber(req.body.agencyMGShareRate, 0.3),
+      rsRate: toNonNegativeNumber(req.body.rsRate, 0.2)
     };
 
     // 새로운 설정으로 PPL 계산 업데이트
@@ -603,20 +650,72 @@ app.delete('/api/channels/:id', async (req, res) => {
   }
 });
 
+// POST: 캠페인 실적 기록 추가 (실제 판매수량/매출 — 향후 전환율 추정 정확도 개선용)
+app.post('/api/channels/:id/campaign-logs', async (req, res) => {
+  try {
+    const channel = await Channel.findById(req.params.id);
+    if (!channel) {
+      return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
+    }
+
+    const { date, actualQty, actualRevenue, note } = req.body;
+    if (!date) return res.status(400).json({ error: '집계 기준일을 입력하세요' });
+
+    // 기록 당시의 예상치를 스냅샷으로 함께 저장해두면 나중에 "예상 대비 실제" 비교가 가능하다.
+    const pplData = calculatePPLSummary(channel.videos, channel.pplSettings);
+
+    channel.campaignLogs.push({
+      date,
+      actualQty: toNonNegativeNumber(actualQty, 0),
+      actualRevenue: toNonNegativeNumber(actualRevenue, 0),
+      expectedQtySnapshot: pplData.estimatedQty,
+      expectedClicksSnapshot: pplData.expectedClicks,
+      note: note || ''
+    });
+
+    await channel.save();
+    res.json(channel);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE: 캠페인 실적 기록 삭제
+app.delete('/api/channels/:channelId/campaign-logs/:logId', async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.channelId)) {
+      return res.status(400).json({ error: '잘못된 ID 형식입니다' });
+    }
+    const channel = await Channel.findById(req.params.channelId);
+    if (!channel) {
+      return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
+    }
+
+    channel.campaignLogs = channel.campaignLogs.filter(
+      log => log._id.toString() !== req.params.logId
+    );
+
+    await channel.save();
+    res.json(channel);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ===== 품목(제품) 관리 API =====
 
 // POST: 품목 추가
 app.post('/api/items', async (req, res) => {
   try {
     const { name, sellPrice, cost, shippingCost, giftCost, memo } = req.body;
-    if (!name) return res.status(400).json({ error: '품목명을 입력하세요' });
+    if (!name || !String(name).trim()) return res.status(400).json({ error: '품목명을 입력하세요' });
 
     const item = new Item({
-      name,
-      sellPrice: sellPrice || 0,
-      cost: cost || 0,
-      shippingCost: shippingCost || 0,
-      giftCost: giftCost || 0,
+      name: String(name).trim(),
+      sellPrice: toNonNegativeNumber(sellPrice),
+      cost: toNonNegativeNumber(cost),
+      shippingCost: toNonNegativeNumber(shippingCost),
+      giftCost: toNonNegativeNumber(giftCost),
       memo: memo || ''
     });
     await item.save();
@@ -643,11 +742,11 @@ app.put('/api/items/:id', async (req, res) => {
     const item = await Item.findById(req.params.id);
     if (!item) return res.status(404).json({ error: '품목을 찾을 수 없습니다' });
 
-    if (name !== undefined) item.name = name;
-    if (sellPrice !== undefined) item.sellPrice = sellPrice;
-    if (cost !== undefined) item.cost = cost;
-    if (shippingCost !== undefined) item.shippingCost = shippingCost;
-    if (giftCost !== undefined) item.giftCost = giftCost;
+    if (name !== undefined && String(name).trim()) item.name = String(name).trim();
+    if (sellPrice !== undefined) item.sellPrice = toNonNegativeNumber(sellPrice, item.sellPrice);
+    if (cost !== undefined) item.cost = toNonNegativeNumber(cost, item.cost);
+    if (shippingCost !== undefined) item.shippingCost = toNonNegativeNumber(shippingCost, item.shippingCost);
+    if (giftCost !== undefined) item.giftCost = toNonNegativeNumber(giftCost, item.giftCost);
     if (memo !== undefined) item.memo = memo;
     item.updatedAt = new Date();
 
@@ -870,11 +969,20 @@ app.get('/api/search', async (req, res) => {
     const { keyword } = req.query;
     if (!keyword) return res.status(400).json({ error: '검색어를 입력하세요' });
 
+    const cacheKey = keyword.trim().toLowerCase();
+    const cached = searchCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < SEARCH_CACHE_TTL_MS) {
+      return res.json(cached.data);
+    }
+
     // 1. 채널 검색
     const searchResponse = await axios.get(`${analyzer.baseURL}/search`, {
       params: { part: 'snippet', q: keyword, type: 'channel', maxResults: 10, regionCode: 'KR', relevanceLanguage: 'ko', key: analyzer.apiKey }
     });
-    if (!searchResponse.data.items?.length) return res.json([]);
+    if (!searchResponse.data.items?.length) {
+      searchCache.set(cacheKey, { timestamp: Date.now(), data: [] });
+      return res.json([]);
+    }
 
     const channelIds = searchResponse.data.items.map(item => item.snippet.channelId);
 
@@ -959,6 +1067,7 @@ app.get('/api/search', async (req, res) => {
     }));
 
     results.sort((a, b) => b.pplScore - a.pplScore);
+    searchCache.set(cacheKey, { timestamp: Date.now(), data: results });
     res.json(results);
   } catch (error) {
     const detail = error.response?.data?.error?.message || error.message;

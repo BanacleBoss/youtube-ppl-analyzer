@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle, Package, Pencil } from 'lucide-react';
-import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem } from './api';
+import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog } from './api';
 
 const InfoTooltip = ({ content, children }) => {
   const [showTooltip, setShowTooltip] = useState(false);
@@ -48,6 +48,9 @@ export default function YouTubeAnalyzer() {
   const [showItemManager, setShowItemManager] = useState(false);
   const [itemForm, setItemForm] = useState({ name: '', sellPrice: '', cost: '', shippingCost: '', giftCost: '', memo: '' });
   const [editingItemId, setEditingItemId] = useState(null);
+
+  // 캠페인 실적 기록
+  const [campaignLogForm, setCampaignLogForm] = useState({ date: '', actualQty: '', actualRevenue: '', note: '' });
 
   useEffect(() => { loadChannels(); loadItems(); }, []);
 
@@ -105,10 +108,10 @@ export default function YouTubeAnalyzer() {
     try {
       const payload = {
         name: itemForm.name.trim(),
-        sellPrice: parseInt(itemForm.sellPrice) || 0,
-        cost: parseInt(itemForm.cost) || 0,
-        shippingCost: parseInt(itemForm.shippingCost) || 0,
-        giftCost: parseInt(itemForm.giftCost) || 0,
+        sellPrice: Math.max(0, parseInt(itemForm.sellPrice) || 0),
+        cost: Math.max(0, parseInt(itemForm.cost) || 0),
+        shippingCost: Math.max(0, parseInt(itemForm.shippingCost) || 0),
+        giftCost: Math.max(0, parseInt(itemForm.giftCost) || 0),
         memo: itemForm.memo || ''
       };
       if (editingItemId) {
@@ -146,6 +149,36 @@ export default function YouTubeAnalyzer() {
       if (editingItemId === itemId) resetItemForm();
     } catch (err) {
       setError('품목 삭제 실패: ' + err.message);
+    }
+  };
+
+  // 캠페인 실적 기록 추가 — 예상치(예상 클릭수×전환율) 대비 실제 결과를 남겨두면
+  // 다음 캠페인의 전환율을 감으로 추정하는 대신 과거 실측 데이터로 보정할 수 있다.
+  const handleAddCampaignLog = async (channelId) => {
+    if (!campaignLogForm.date) { setError('집계 기준일을 입력하세요'); return; }
+    try {
+      const payload = {
+        date: campaignLogForm.date,
+        actualQty: Math.max(0, parseInt(campaignLogForm.actualQty) || 0),
+        actualRevenue: Math.max(0, parseInt(campaignLogForm.actualRevenue) || 0),
+        note: campaignLogForm.note || ''
+      };
+      const updated = await addCampaignLog(channelId, payload);
+      setChannels(channels.map(ch => ch._id === channelId ? updated : ch));
+      setCampaignLogForm({ date: '', actualQty: '', actualRevenue: '', note: '' });
+      setError('✓ 캠페인 실적이 기록되었습니다');
+    } catch (err) {
+      setError('캠페인 실적 기록 실패: ' + (err.response?.data?.error || err.message));
+    }
+  };
+
+  const handleDeleteCampaignLog = async (channelId, logId) => {
+    if (!window.confirm('이 실적 기록을 삭제하시겠습니까?')) return;
+    try {
+      const updated = await deleteCampaignLog(channelId, logId);
+      setChannels(channels.map(ch => ch._id === channelId ? updated : ch));
+    } catch (err) {
+      setError('실적 기록 삭제 실패: ' + (err.response?.data?.error || err.message));
     }
   };
 
@@ -491,19 +524,19 @@ export default function YouTubeAnalyzer() {
                 </div>
                 <div>
                   <label className="block text-slate-300 text-xs mb-1">판매가 (원)</label>
-                  <input type="number" value={itemForm.sellPrice} onChange={e => setItemForm({ ...itemForm, sellPrice: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                  <input type="number" min="0" value={itemForm.sellPrice} onChange={e => setItemForm({ ...itemForm, sellPrice: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
                 </div>
                 <div>
                   <label className="block text-slate-300 text-xs mb-1">원가 (원)</label>
-                  <input type="number" value={itemForm.cost} onChange={e => setItemForm({ ...itemForm, cost: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                  <input type="number" min="0" value={itemForm.cost} onChange={e => setItemForm({ ...itemForm, cost: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
                 </div>
                 <div>
                   <label className="block text-slate-300 text-xs mb-1">배송비 (원)</label>
-                  <input type="number" value={itemForm.shippingCost} onChange={e => setItemForm({ ...itemForm, shippingCost: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                  <input type="number" min="0" value={itemForm.shippingCost} onChange={e => setItemForm({ ...itemForm, shippingCost: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
                 </div>
                 <div>
                   <label className="block text-slate-300 text-xs mb-1">사은품 비용 (원)</label>
-                  <input type="number" value={itemForm.giftCost} onChange={e => setItemForm({ ...itemForm, giftCost: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                  <input type="number" min="0" value={itemForm.giftCost} onChange={e => setItemForm({ ...itemForm, giftCost: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
                 </div>
                 <div className="col-span-2 md:col-span-1">
                   <label className="block text-slate-300 text-xs mb-1">메모</label>
@@ -989,36 +1022,36 @@ export default function YouTubeAnalyzer() {
                         </select>
                         {items.length === 0 && <p className="text-xs text-slate-500 mt-1">등록된 품목이 없습니다. 상단 "📦 품목관리"에서 먼저 등록하세요.</p>}
                       </div>
-                      <div><label className="block text-slate-300 text-sm mb-2">상품 객단가 / 판매가 (원)</label><input type="number" value={settings.productPrice} onChange={(e) => setSettings({...settings, productPrice: parseInt(e.target.value)})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
+                      <div><label className="block text-slate-300 text-sm mb-2">상품 객단가 / 판매가 (원)</label><input type="number" min="0" value={settings.productPrice} onChange={(e) => setSettings({...settings, productPrice: parseInt(e.target.value)})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
                       <div>
                         <label className="block text-slate-300 text-sm mb-2">예상 클릭수 (회)</label>
-                        <input type="number" value={settings.expectedClicks} onChange={(e) => setSettings({...settings, expectedClicks: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" />
+                        <input type="number" min="0" value={settings.expectedClicks} onChange={(e) => setSettings({...settings, expectedClicks: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" />
                         <div className="flex items-center justify-between gap-2 mt-1">
                           <p className="text-xs text-slate-500">참고: 최근 롱폼 평균조회수 × 인게이지먼트 = {suggestedClicks.toLocaleString()}회</p>
                           <button type="button" onClick={() => setSettings({...settings, expectedClicks: suggestedClicks})} className="text-xs text-blue-400 hover:text-blue-300 shrink-0 whitespace-nowrap">이 값 적용</button>
                         </div>
                       </div>
-                      <div><label className="block text-slate-300 text-sm mb-2">예상 전환율 (%, 클릭 대비 구매)</label><input type="number" step="0.01" value={settings.expectedConversionRate * 100} onChange={(e) => setSettings({...settings, expectedConversionRate: parseFloat(e.target.value) / 100})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
+                      <div><label className="block text-slate-300 text-sm mb-2">예상 전환율 (%, 클릭 대비 구매)</label><input type="number" min="0" step="0.01" value={settings.expectedConversionRate * 100} onChange={(e) => setSettings({...settings, expectedConversionRate: parseFloat(e.target.value) / 100})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
 
                       <div className="border-t border-slate-700 pt-4 mt-2">
                         <h4 className="text-slate-200 font-semibold mb-3">💰 손익/BEP 계산용 원가 정보</h4>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <div><label className="block text-slate-300 text-xs mb-1">원가 (원)</label><input type="number" value={settings.cost} onChange={(e) => setSettings({...settings, cost: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
-                          <div><label className="block text-slate-300 text-xs mb-1">배송비 (원)</label><input type="number" value={settings.shippingCost} onChange={(e) => setSettings({...settings, shippingCost: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
-                          <div><label className="block text-slate-300 text-xs mb-1">사은품 비용 (원)</label><input type="number" value={settings.giftCost} onChange={(e) => setSettings({...settings, giftCost: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                          <div><label className="block text-slate-300 text-xs mb-1">원가 (원)</label><input type="number" min="0" value={settings.cost} onChange={(e) => setSettings({...settings, cost: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                          <div><label className="block text-slate-300 text-xs mb-1">배송비 (원)</label><input type="number" min="0" value={settings.shippingCost} onChange={(e) => setSettings({...settings, shippingCost: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                          <div><label className="block text-slate-300 text-xs mb-1">사은품 비용 (원)</label><input type="number" min="0" value={settings.giftCost} onChange={(e) => setSettings({...settings, giftCost: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
                         </div>
                         <div className="mt-3">
                           <label className="block text-slate-300 text-xs mb-1">PG(결제) 수수료율 (%)</label>
-                          <input type="number" step="0.01" value={settings.pgFeeRate * 100} onChange={(e) => setSettings({...settings, pgFeeRate: parseFloat(e.target.value) / 100 || 0})} className="w-full md:w-1/3 bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                          <input type="number" min="0" step="0.01" value={settings.pgFeeRate * 100} onChange={(e) => setSettings({...settings, pgFeeRate: parseFloat(e.target.value) / 100 || 0})} className="w-full md:w-1/3 bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
                         </div>
                       </div>
 
                       <div className="border-t border-slate-700 pt-4 mt-2">
                         <h4 className="text-slate-200 font-semibold mb-3">🤝 MG / RS 딜 구조 (쇼크 대행)</h4>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <div><label className="block text-slate-300 text-xs mb-1">총 MG 비용 (원) — PPL 총 비용</label><input type="number" value={settings.totalMG} onChange={(e) => setSettings({...settings, totalMG: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
-                          <div><label className="block text-slate-300 text-xs mb-1">대행사 MG 분담율 (%)</label><input type="number" step="1" value={settings.agencyMGShareRate * 100} onChange={(e) => setSettings({...settings, agencyMGShareRate: parseFloat(e.target.value) / 100 || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
-                          <div><label className="block text-slate-300 text-xs mb-1">RS율 (%, 대행사 지급)</label><input type="number" step="1" value={settings.rsRate * 100} onChange={(e) => setSettings({...settings, rsRate: parseFloat(e.target.value) / 100 || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                          <div><label className="block text-slate-300 text-xs mb-1">총 MG 비용 (원) — PPL 총 비용</label><input type="number" min="0" value={settings.totalMG} onChange={(e) => setSettings({...settings, totalMG: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                          <div><label className="block text-slate-300 text-xs mb-1">대행사 MG 분담율 (%)</label><input type="number" min="0" step="1" value={settings.agencyMGShareRate * 100} onChange={(e) => setSettings({...settings, agencyMGShareRate: parseFloat(e.target.value) / 100 || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                          <div><label className="block text-slate-300 text-xs mb-1">RS율 (%, 대행사 지급)</label><input type="number" min="0" step="1" value={settings.rsRate * 100} onChange={(e) => setSettings({...settings, rsRate: parseFloat(e.target.value) / 100 || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
                         </div>
                         <p className="text-xs text-slate-500 mt-2">예: 총 MG 1,000만원, RS 20% 합의 시 대행사가 MG의 30%(300만원)를 분담 → 대행사 MG 분담율 30 입력</p>
                         {(() => {
@@ -1089,6 +1122,53 @@ export default function YouTubeAnalyzer() {
                           <div className="mt-4 p-3 bg-red-900 border border-red-700 rounded text-red-200 text-sm">
                             ⚠️ 개당 기여마진이 0원 이하입니다. 판매가, 원가, RS율 등을 다시 확인하세요.
                           </div>
+                        )}
+                      </div>
+
+                      <div className="mt-6 pt-6 border-t border-slate-700">
+                        <h3 className="text-lg font-bold text-white mb-1">📋 캠페인 실적 기록</h3>
+                        <p className="text-slate-400 text-xs mb-4">캠페인 종료 후 실제 판매수량/매출을 기록해두면, 예상치와 비교해 다음 캠페인의 전환율을 더 정확하게 가늠할 수 있습니다.</p>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-3">
+                          <input type="date" value={campaignLogForm.date} onChange={e => setCampaignLogForm({...campaignLogForm, date: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                          <input type="number" min="0" placeholder="실제 판매수량" value={campaignLogForm.actualQty} onChange={e => setCampaignLogForm({...campaignLogForm, actualQty: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                          <input type="number" min="0" placeholder="실제 매출(원)" value={campaignLogForm.actualRevenue} onChange={e => setCampaignLogForm({...campaignLogForm, actualRevenue: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                          <input type="text" placeholder="메모 (선택)" value={campaignLogForm.note} onChange={e => setCampaignLogForm({...campaignLogForm, note: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                        </div>
+                        <button onClick={() => handleAddCampaignLog(selectedChannel._id)} className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-4 py-2 rounded font-semibold transition mb-4">+ 실적 기록 추가</button>
+
+                        {(selectedChannel.campaignLogs && selectedChannel.campaignLogs.length > 0) ? (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead className="border-b border-slate-600"><tr className="text-slate-300">
+                                <th className="text-left p-2">날짜</th>
+                                <th className="text-right p-2">실제 판매수량</th>
+                                <th className="text-right p-2">실제 매출</th>
+                                <th className="text-right p-2">당시 예상수량</th>
+                                <th className="text-right p-2">실측 전환율</th>
+                                <th className="text-left p-2">메모</th>
+                                <th className="text-center p-2">관리</th>
+                              </tr></thead>
+                              <tbody>
+                                {[...selectedChannel.campaignLogs].sort((a, b) => new Date(b.date) - new Date(a.date)).map(log => {
+                                  const measuredRate = log.expectedClicksSnapshot ? (log.actualQty / log.expectedClicksSnapshot * 100) : null;
+                                  return (
+                                    <tr key={log._id} className="border-b border-slate-700 hover:bg-slate-700 transition">
+                                      <td className="p-2 text-slate-300">{log.date}</td>
+                                      <td className="text-right p-2 text-white">{log.actualQty?.toLocaleString()}개</td>
+                                      <td className="text-right p-2 text-white">{log.actualRevenue?.toLocaleString()}원</td>
+                                      <td className="text-right p-2 text-slate-400">{log.expectedQtySnapshot !== null && log.expectedQtySnapshot !== undefined ? `${log.expectedQtySnapshot.toLocaleString()}개` : '-'}</td>
+                                      <td className="text-right p-2 text-blue-400">{measuredRate !== null ? `${measuredRate.toFixed(2)}%` : '-'}</td>
+                                      <td className="p-2 text-slate-400">{log.note}</td>
+                                      <td className="text-center p-2"><button onClick={() => handleDeleteCampaignLog(selectedChannel._id, log._id)} className="text-red-400 hover:text-red-300 p-1"><Trash2 size={14} /></button></td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <p className="text-slate-500 text-sm text-center py-4">아직 기록된 실적이 없습니다.</p>
                         )}
                       </div>
                     </div>
