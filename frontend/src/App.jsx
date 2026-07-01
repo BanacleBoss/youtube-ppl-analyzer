@@ -437,74 +437,97 @@ export default function YouTubeAnalyzer() {
   };
 
   // 효율 점수 계산 (0~100점)
-  // 구독자 대비 조회수 비율 25점 + 업로드 주기 25점 + 인게이지먼트 25점 + 롱폼 비율 25점
+  // 인게이지먼트 35 + 구독자대비조회수 25 + 조회수일관성 15 + 업로드주기 10 + 광고비율 10 + 채널연령 5
   const calculateEfficiencyScore = (channel) => {
     const videos = channel?.videos || [];
     const subscribers = channel?.subscribers || 0;
-    const allVideos = videos.length;
     const lf = filterVideos(videos, 'longform');
     const mid = filterVideos(videos, 'mid');
-
-    // 1. 구독자 대비 조회수 비율
-    const sorted = [...videos].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
-    const recentAvgViews = sorted.slice(0, 10).reduce((s, v) => s + (v.views || 0), 0) / Math.max(sorted.slice(0, 10).length, 1);
-    const viewsRatio = subscribers > 0 ? (recentAvgViews / subscribers) * 100 : 0;
-    let viewsScore = 5;
-    if (viewsRatio >= 30) viewsScore = 25;
-    else if (viewsRatio >= 15) viewsScore = 20;
-    else if (viewsRatio >= 5) viewsScore = 13;
-
-    // 2. 업로드 주기 (롱폼 기준 최근 10개 간격 평균)
-    let uploadScore = 5;
     const lfSorted = [...lf].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
-    const recentDates = lfSorted.slice(0, 10).map(v => new Date(v.uploadDate)).filter(d => !isNaN(d));
-    if (recentDates.length >= 2) {
-      let totalGap = 0;
-      for (let i = 0; i < recentDates.length - 1; i++) {
-        totalGap += (recentDates[i] - recentDates[i + 1]) / (1000 * 60 * 60 * 24);
+    const recentLF = lfSorted.slice(0, 10);
+
+    // 1. 인게이지먼트율 (35점) — PPL 전환에 가장 직결
+    const engRate = recentLF.length > 0
+      ? recentLF.reduce((s, v) => s + (parseFloat(v.engagement) || 0), 0) / recentLF.length : 0;
+    let engScore = 3;
+    if (engRate >= 5) engScore = 35;
+    else if (engRate >= 3) engScore = 26;
+    else if (engRate >= 1.5) engScore = 17;
+    else if (engRate >= 0.5) engScore = 9;
+
+    // 2. 구독자 대비 조회수 비율 (25점) — 실제 영향력·충성도
+    const recentAvgViews = recentLF.length > 0
+      ? recentLF.reduce((s, v) => s + (v.views || 0), 0) / recentLF.length : 0;
+    const viewsRatio = subscribers > 0 ? (recentAvgViews / subscribers) * 100 : 0;
+    let viewsScore = 3;
+    if (viewsRatio >= 30) viewsScore = 25;
+    else if (viewsRatio >= 15) viewsScore = 19;
+    else if (viewsRatio >= 5) viewsScore = 12;
+    else if (viewsRatio >= 2) viewsScore = 6;
+
+    // 3. 조회수 일관성 (15점) — 예측 가능성·투자 리스크
+    let consistencyScore = 3;
+    let cvPercent = null;
+    if (recentLF.length >= 3) {
+      const views = recentLF.map(v => v.views || 0);
+      const mean = views.reduce((s, v) => s + v, 0) / views.length;
+      if (mean > 0) {
+        const variance = views.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / views.length;
+        const cv = Math.sqrt(variance) / mean * 100; // 변동계수(%)
+        cvPercent = Math.round(cv);
+        if (cv <= 30) consistencyScore = 15;
+        else if (cv <= 60) consistencyScore = 11;
+        else if (cv <= 100) consistencyScore = 6;
       }
-      const avgGapDays = totalGap / (recentDates.length - 1);
-      if (avgGapDays <= 7) uploadScore = 25;
-      else if (avgGapDays <= 14) uploadScore = 20;
-      else if (avgGapDays <= 30) uploadScore = 12;
     }
 
-    // 3. 인게이지먼트율
-    const recentLF = lf.slice(0, 10);
-    const engRate = recentLF.length > 0
-      ? recentLF.reduce((s, v) => s + (parseFloat(v.engagement) || 0), 0) / recentLF.length
-      : 0;
-    let engScore = 5;
-    if (engRate >= 5) engScore = 25;
-    else if (engRate >= 3) engScore = 18;
-    else if (engRate >= 1) engScore = 10;
-
-    // 4. 롱폼 비율
-    const longformRatio = allVideos > 0 ? ((lf.length + mid.length > 0 ? lf.length / (lf.length + mid.length) : 0) * 100) : 0;
-    let lfScore = 5;
-    if (longformRatio >= 50) lfScore = 25;
-    else if (longformRatio >= 30) lfScore = 18;
-    else if (longformRatio >= 10) lfScore = 10;
-
-    const total = viewsScore + uploadScore + engScore + lfScore;
-    const avgGapDays = (() => {
-      if (recentDates.length < 2) return null;
+    // 4. 업로드 주기 (10점) — 롱폼 기준, 활동성
+    let uploadScore = 1;
+    const recentDates = recentLF.map(v => new Date(v.uploadDate)).filter(d => !isNaN(d));
+    let avgGapDays = null;
+    if (recentDates.length >= 2) {
       let totalGap = 0;
-      for (let i = 0; i < recentDates.length - 1; i++) totalGap += (recentDates[i] - recentDates[i + 1]) / (1000 * 60 * 60 * 24);
-      return Math.round(totalGap / (recentDates.length - 1));
-    })();
+      for (let i = 0; i < recentDates.length - 1; i++)
+        totalGap += (recentDates[i] - recentDates[i + 1]) / (1000 * 60 * 60 * 24);
+      avgGapDays = Math.round(totalGap / (recentDates.length - 1));
+      if (avgGapDays <= 7) uploadScore = 10;
+      else if (avgGapDays <= 14) uploadScore = 8;
+      else if (avgGapDays <= 30) uploadScore = 5;
+    }
+
+    // 5. 최근 광고 비율 (10점) — 낮을수록 PPL 친화적
+    let adScore = 5;
+    const recentAll = [...videos].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate)).slice(0, 20);
+    const adCount = recentAll.filter(v => v.isAd).length;
+    const adRatio = recentAll.length > 0 ? adCount / recentAll.length * 100 : 0;
+    if (adRatio <= 10) adScore = 10;
+    else if (adRatio <= 25) adScore = 7;
+    else if (adRatio <= 40) adScore = 4;
+    else adScore = 1;
+
+    // 6. 채널 연령 (5점) — 오래될수록 신뢰도·안정성 높음
+    let ageScore = 1;
+    let channelAgeYears = null;
+    if (channel?.channelPublishedAt) {
+      channelAgeYears = (Date.now() - new Date(channel.channelPublishedAt)) / (1000 * 60 * 60 * 24 * 365);
+      if (channelAgeYears >= 5) ageScore = 5;
+      else if (channelAgeYears >= 3) ageScore = 4;
+      else if (channelAgeYears >= 1) ageScore = 2;
+    }
+
+    const total = Math.min(100, engScore + viewsScore + consistencyScore + uploadScore + adScore + ageScore);
+    const longformRatio = (lf.length + mid.length) > 0 ? (lf.length / (lf.length + mid.length) * 100) : 0;
 
     return {
       total,
       details: {
-        viewsRatio: viewsRatio.toFixed(1),
-        viewsScore,
-        avgGapDays,
-        uploadScore,
-        engRate: engRate.toFixed(2),
-        engScore,
+        engRate: engRate.toFixed(2), engScore,
+        viewsRatio: viewsRatio.toFixed(1), viewsScore,
+        cvPercent, consistencyScore,
+        avgGapDays, uploadScore,
+        adRatio: adRatio.toFixed(1), adScore,
+        channelAgeYears: channelAgeYears ? channelAgeYears.toFixed(1) : null, ageScore,
         longformRatio: longformRatio.toFixed(1),
-        lfScore
       }
     };
   };
@@ -576,10 +599,12 @@ export default function YouTubeAnalyzer() {
       `## ⚡ 채널 효율 점수: **${eff.total}점 / 100점**`,
       `| 지표 | 값 | 점수 |`,
       `|------|-----|------|`,
+      `| 인게이지먼트율 | ${eff.details.engRate}% | ${eff.details.engScore}/35 |`,
       `| 구독자 대비 조회수 | ${eff.details.viewsRatio}% | ${eff.details.viewsScore}/25 |`,
-      `| 평균 업로드 주기 | ${eff.details.avgGapDays !== null ? eff.details.avgGapDays+'일' : '-'} | ${eff.details.uploadScore}/25 |`,
-      `| 인게이지먼트율 | ${eff.details.engRate}% | ${eff.details.engScore}/25 |`,
-      `| 롱폼 비율 | ${eff.details.longformRatio}% | ${eff.details.lfScore}/25 |`,
+      `| 조회수 일관성 (변동계수) | ${eff.details.cvPercent !== null ? eff.details.cvPercent+'%' : '-'} | ${eff.details.consistencyScore}/15 |`,
+      `| 평균 업로드 주기 (롱폼) | ${eff.details.avgGapDays !== null ? eff.details.avgGapDays+'일' : '-'} | ${eff.details.uploadScore}/10 |`,
+      `| 최근 광고 비율 | ${eff.details.adRatio}% | ${eff.details.adScore}/10 |`,
+      `| 채널 연령 | ${eff.details.channelAgeYears !== null ? eff.details.channelAgeYears+'년' : '-'} | ${eff.details.ageScore}/5 |`,
       ``,
       `## 📈 PPL 분석 (최근 롱폼 10개 기준)`,
       `| 항목 | 값 |`,
@@ -942,7 +967,7 @@ export default function YouTubeAnalyzer() {
                           <div className="flex items-center justify-between mb-4">
                             <div>
                               <h3 className="text-lg font-bold text-white">⚡ 채널 효율 점수</h3>
-                              <p className="text-xs text-slate-400 mt-0.5">구독자대비조회수 · 업로드주기 · 인게이지먼트 · 롱폼비율</p>
+                              <p className="text-xs text-slate-400 mt-0.5">인게이지먼트(35) · 조회수비율(25) · 일관성(15) · 업로드주기(10) · 광고비율(10) · 채널연령(5)</p>
                             </div>
                             <div className="text-center">
                               <p className={`text-4xl font-bold ${scoreColor}`}>{eff.total}<span className="text-lg">점</span></p>
@@ -950,6 +975,16 @@ export default function YouTubeAnalyzer() {
                             </div>
                           </div>
                           <div className="grid grid-cols-2 gap-3">
+                            <div className="bg-black bg-opacity-30 rounded p-3">
+                              <InfoTooltip content="롱폼 최근 10개 기준 평균 인게이지먼트율. PPL 전환에 직결되는 가장 중요한 지표입니다.">
+                                <p className="text-slate-300 text-xs">💬 인게이지먼트율</p>
+                              </InfoTooltip>
+                              <p className="text-xl font-bold text-white mt-1">{d.engRate}%</p>
+                              <div className="flex justify-between items-center mt-1">
+                                <p className="text-xs text-slate-400">{d.engRate >= 5 ? '매우 높음 ✓' : d.engRate >= 3 ? '높음' : d.engRate >= 1.5 ? '보통' : '낮음'}</p>
+                                <p className="text-xs font-bold text-yellow-400">{d.engScore}/35점</p>
+                              </div>
+                            </div>
                             <div className="bg-black bg-opacity-30 rounded p-3">
                               <InfoTooltip content="최근 10개 영상 평균 조회수 ÷ 구독자 수. 30% 이상이면 충성도 높은 채널입니다.">
                                 <p className="text-slate-300 text-xs">👥 구독자 대비 조회수</p>
@@ -961,33 +996,43 @@ export default function YouTubeAnalyzer() {
                               </div>
                             </div>
                             <div className="bg-black bg-opacity-30 rounded p-3">
-                              <InfoTooltip content="최근 10개 영상 사이의 평균 업로드 간격. 7일 이하면 꾸준한 활동 채널입니다.">
-                                <p className="text-slate-300 text-xs">📅 평균 업로드 주기</p>
+                              <InfoTooltip content="조회수 변동계수(CV). 낮을수록 매 영상 조회수가 안정적 — PPL ROI 예측이 쉽습니다.">
+                                <p className="text-slate-300 text-xs">📊 조회수 일관성</p>
+                              </InfoTooltip>
+                              <p className="text-xl font-bold text-white mt-1">{d.cvPercent !== null ? `CV ${d.cvPercent}%` : '-'}</p>
+                              <div className="flex justify-between items-center mt-1">
+                                <p className="text-xs text-slate-400">{d.cvPercent !== null ? (d.cvPercent <= 30 ? '매우 안정적 ✓' : d.cvPercent <= 60 ? '안정적' : d.cvPercent <= 100 ? '보통' : '불안정') : '-'}</p>
+                                <p className="text-xs font-bold text-yellow-400">{d.consistencyScore}/15점</p>
+                              </div>
+                            </div>
+                            <div className="bg-black bg-opacity-30 rounded p-3">
+                              <InfoTooltip content="최근 롱폼 10개 기준 평균 업로드 간격. 7일 이하면 꾸준히 활동하는 채널입니다.">
+                                <p className="text-slate-300 text-xs">📅 업로드 주기 (롱폼)</p>
                               </InfoTooltip>
                               <p className="text-xl font-bold text-white mt-1">{d.avgGapDays !== null ? `${d.avgGapDays}일` : '-'}</p>
                               <div className="flex justify-between items-center mt-1">
                                 <p className="text-xs text-slate-400">{d.avgGapDays !== null ? (d.avgGapDays <= 7 ? '매우 활발 ✓' : d.avgGapDays <= 14 ? '활발' : d.avgGapDays <= 30 ? '보통' : '비활성') : '-'}</p>
-                                <p className="text-xs font-bold text-yellow-400">{d.uploadScore}/25점</p>
+                                <p className="text-xs font-bold text-yellow-400">{d.uploadScore}/10점</p>
                               </div>
                             </div>
                             <div className="bg-black bg-opacity-30 rounded p-3">
-                              <InfoTooltip content="롱폼 최근 10개 기준 평균 인게이지먼트율. 5% 이상이면 반응이 매우 좋은 채널입니다.">
-                                <p className="text-slate-300 text-xs">💬 인게이지먼트율</p>
+                              <InfoTooltip content="최근 영상 20개 중 광고(isAd) 비율. 낮을수록 PPL 피로도가 낮고 수용도가 높습니다.">
+                                <p className="text-slate-300 text-xs">📢 최근 광고 비율</p>
                               </InfoTooltip>
-                              <p className="text-xl font-bold text-white mt-1">{d.engRate}%</p>
+                              <p className="text-xl font-bold text-white mt-1">{d.adRatio}%</p>
                               <div className="flex justify-between items-center mt-1">
-                                <p className="text-xs text-slate-400">{d.engRate >= 5 ? '매우 높음 ✓' : d.engRate >= 3 ? '높음' : d.engRate >= 1 ? '보통' : '낮음'}</p>
-                                <p className="text-xs font-bold text-yellow-400">{d.engScore}/25점</p>
+                                <p className="text-xs text-slate-400">{d.adRatio <= 10 ? 'PPL 친화적 ✓' : d.adRatio <= 25 ? '양호' : d.adRatio <= 40 ? '주의' : '광고 과다'}</p>
+                                <p className="text-xs font-bold text-yellow-400">{d.adScore}/10점</p>
                               </div>
                             </div>
                             <div className="bg-black bg-opacity-30 rounded p-3">
-                              <InfoTooltip content="롱폼(10분↑) ÷ (롱폼+미드폼) 비율. PPL은 롱폼에서 효과가 높습니다.">
-                                <p className="text-slate-300 text-xs">🎬 롱폼 비율</p>
+                              <InfoTooltip content="채널 개설 이후 경과 연수. 오래된 채널일수록 신뢰도와 팬덤 안정성이 높습니다.">
+                                <p className="text-slate-300 text-xs">📆 채널 연령</p>
                               </InfoTooltip>
-                              <p className="text-xl font-bold text-white mt-1">{d.longformRatio}%</p>
+                              <p className="text-xl font-bold text-white mt-1">{d.channelAgeYears !== null ? `${d.channelAgeYears}년` : '-'}</p>
                               <div className="flex justify-between items-center mt-1">
-                                <p className="text-xs text-slate-400">{d.longformRatio >= 50 ? 'PPL 최적 ✓' : d.longformRatio >= 30 ? '적합' : '낮음'}</p>
-                                <p className="text-xs font-bold text-yellow-400">{d.lfScore}/25점</p>
+                                <p className="text-xs text-slate-400">{d.channelAgeYears !== null ? (d.channelAgeYears >= 5 ? '신뢰도 높음 ✓' : d.channelAgeYears >= 3 ? '안정적' : d.channelAgeYears >= 1 ? '성장기' : '신규') : '-'}</p>
+                                <p className="text-xs font-bold text-yellow-400">{d.ageScore}/5점</p>
                               </div>
                             </div>
                           </div>
