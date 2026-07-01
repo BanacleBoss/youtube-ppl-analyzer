@@ -539,14 +539,18 @@ app.get('/api/channels/:id', async (req, res) => {
 
 // POST: 채널 데이터 새로고침
 app.post('/api/channels/:id/refresh', async (req, res) => {
+  console.log(`[REFRESH] 요청 시작: ${req.params.id}`);
   try {
     const channel = await Channel.findById(req.params.id);
     if (!channel) {
       return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
     }
+    console.log(`[REFRESH] 채널 찾음: ${channel.channelName} (${channel.channelId})`);
 
     const channelInfo = await analyzer.getChannelInfo(channel.channelId);
+    console.log(`[REFRESH] 채널 정보 수집 완료`);
     const videos = await analyzer.getChannelVideos(channel.channelId);
+    console.log(`[REFRESH] 영상 수집 완료: ${videos.length}개`);
 
     const pplData = calculatePPLSummary(videos, channel.pplSettings);
     const today = new Date().toISOString().split('T')[0];
@@ -590,6 +594,7 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
       channel
     });
   } catch (error) {
+    console.error(`[REFRESH ERROR] ${error.message}`, error.stack);
     res.status(500).json({ error: error.message });
   }
 });
