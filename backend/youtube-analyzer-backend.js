@@ -407,7 +407,6 @@ class YouTubeAnalyzer {
             uploadDate: new Date(video.snippet.publishedAt),
             duration: this.parseDuration(video.contentDetails.duration),
             engagement: (engagement * 100).toFixed(2),
-            tags: video.snippet.tags || [],
             categoryId: video.snippet.categoryId || '',
             definition: video.contentDetails.definition || '',
             hasPaidPromotion,
@@ -548,10 +547,6 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
     const channelInfo = await analyzer.getChannelInfo(channel.channelId);
     const videos = await analyzer.getChannelVideos(channel.channelId);
 
-    const newVideos = videos.filter(v => 
-      !channel.videos.some(existing => existing.videoId === v.videoId)
-    );
-
     const pplData = calculatePPLSummary(videos, channel.pplSettings);
     const today = new Date().toISOString().split('T')[0];
     const todayStats = channel.dailyStats.find(d => d.date === today);
@@ -572,8 +567,8 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
     channel.country = channelInfo.country;
     channel.channelKeywords = channelInfo.channelKeywords;
     channel.videoCount = channelInfo.videoCount;
-    // 기존 영상 유지 + 새 영상만 추가 (누적)
-    channel.videos = [...channel.videos, ...newVideos];
+    // 전체 영상을 최신 데이터로 교체 (전체 페이지네이션으로 가져오므로 누적 불필요)
+    channel.videos = videos;
     channel.lastUpdated = new Date();
 
     channel.history.push({
@@ -590,7 +585,7 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
     await channel.save();
     res.json({
       message: '데이터 업데이트 완료',
-      newVideosDetected: newVideos.length,
+      totalVideos: videos.length,
       channel
     });
   } catch (error) {
