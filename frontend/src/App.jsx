@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle } from 'lucide-react';
-import { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments } from './api';
+import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle, Package, Pencil } from 'lucide-react';
+import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem } from './api';
 
 const InfoTooltip = ({ content, children }) => {
   const [showTooltip, setShowTooltip] = useState(false);
@@ -30,7 +30,11 @@ export default function YouTubeAnalyzer() {
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState({});
   const [activeTab, setActiveTab] = useState('summary');
-  const [settings, setSettings] = useState({ productPrice: 50000, adBudget: 1000000, expectedConversionRate: 0.03, commissionRate: 0.1 });
+  const [settings, setSettings] = useState({
+    productPrice: 50000, adBudget: 1000000, expectedConversionRate: 0.03, commissionRate: 0.1,
+    itemId: '', itemName: '', cost: 0, shippingCost: 0, giftCost: 0, pgFeeRate: 0.0385,
+    totalMG: 0, agencyMGShareRate: 0.3, rsRate: 0.2
+  });
   const [sortConfig, setSortConfig] = useState({ key: 'uploadDate', direction: 'desc' });
   const [analyzingComments, setAnalyzingComments] = useState(false);
   const [showDiscover, setShowDiscover] = useState(false);
@@ -38,7 +42,13 @@ export default function YouTubeAnalyzer() {
   const [discoverResults, setDiscoverResults] = useState([]);
   const [discovering, setDiscovering] = useState(false);
 
-  useEffect(() => { loadChannels(); }, []);
+  // 품목 관리
+  const [items, setItems] = useState([]);
+  const [showItemManager, setShowItemManager] = useState(false);
+  const [itemForm, setItemForm] = useState({ name: '', sellPrice: '', cost: '', shippingCost: '', giftCost: '', memo: '' });
+  const [editingItemId, setEditingItemId] = useState(null);
+
+  useEffect(() => { loadChannels(); loadItems(); }, []);
 
   // 채널 선택 시 해당 채널의 설정값 로드
   useEffect(() => {
@@ -49,6 +59,15 @@ export default function YouTubeAnalyzer() {
         adBudget: ch.pplSettings.adBudget ?? 1000000,
         expectedConversionRate: ch.pplSettings.expectedConversionRate ?? 0.03,
         commissionRate: ch.pplSettings.commissionRate ?? 0.1,
+        itemId: ch.pplSettings.itemId ?? '',
+        itemName: ch.pplSettings.itemName ?? '',
+        cost: ch.pplSettings.cost ?? 0,
+        shippingCost: ch.pplSettings.shippingCost ?? 0,
+        giftCost: ch.pplSettings.giftCost ?? 0,
+        pgFeeRate: ch.pplSettings.pgFeeRate ?? 0.0385,
+        totalMG: ch.pplSettings.totalMG ?? 0,
+        agencyMGShareRate: ch.pplSettings.agencyMGShareRate ?? 0.3,
+        rsRate: ch.pplSettings.rsRate ?? 0.2,
       });
     }
   }, [selectedChannelId, channels]);
@@ -64,6 +83,109 @@ export default function YouTubeAnalyzer() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const loadItems = async () => {
+    try {
+      const data = await getItems();
+      setItems(data);
+    } catch (err) {
+      // 품목 목록 로드 실패는 조용히 무시 (핵심 기능 아님)
+    }
+  };
+
+  const resetItemForm = () => {
+    setItemForm({ name: '', sellPrice: '', cost: '', shippingCost: '', giftCost: '', memo: '' });
+    setEditingItemId(null);
+  };
+
+  const handleSaveItem = async () => {
+    if (!itemForm.name.trim()) { setError('품목명을 입력하세요'); return; }
+    try {
+      const payload = {
+        name: itemForm.name.trim(),
+        sellPrice: parseInt(itemForm.sellPrice) || 0,
+        cost: parseInt(itemForm.cost) || 0,
+        shippingCost: parseInt(itemForm.shippingCost) || 0,
+        giftCost: parseInt(itemForm.giftCost) || 0,
+        memo: itemForm.memo || ''
+      };
+      if (editingItemId) {
+        const updated = await updateItem(editingItemId, payload);
+        setItems(items.map(it => it._id === editingItemId ? updated : it));
+        setError('✓ 품목이 수정되었습니다');
+      } else {
+        const created = await addItem(payload);
+        setItems([...items, created]);
+        setError('✓ 품목이 등록되었습니다');
+      }
+      resetItemForm();
+    } catch (err) {
+      setError('품목 저장 실패: ' + (err.response?.data?.error || err.message));
+    }
+  };
+
+  const handleEditItem = (item) => {
+    setEditingItemId(item._id);
+    setItemForm({
+      name: item.name,
+      sellPrice: item.sellPrice ?? '',
+      cost: item.cost ?? '',
+      shippingCost: item.shippingCost ?? '',
+      giftCost: item.giftCost ?? '',
+      memo: item.memo ?? ''
+    });
+  };
+
+  const handleDeleteItem = async (itemId) => {
+    if (!window.confirm('이 품목을 삭제하시겠습니까?')) return;
+    try {
+      await deleteItem(itemId);
+      setItems(items.filter(it => it._id !== itemId));
+      if (editingItemId === itemId) resetItemForm();
+    } catch (err) {
+      setError('품목 삭제 실패: ' + err.message);
+    }
+  };
+
+  // 품목 선택 시 판매가/원가/배송비/사은품비용 자동 반영
+  const handleSelectItem = (itemId) => {
+    const item = items.find(it => it._id === itemId);
+    if (!item) {
+      setSettings({ ...settings, itemId: '', itemName: '' });
+      return;
+    }
+    setSettings({
+      ...settings,
+      itemId: item._id,
+      itemName: item.name,
+      productPrice: item.sellPrice ?? settings.productPrice,
+      cost: item.cost ?? 0,
+      shippingCost: item.shippingCost ?? 0,
+      giftCost: item.giftCost ?? 0
+    });
+  };
+
+  // MG/RS/BEP 손익 계산 (백엔드 calculatePPLProfit과 동일한 로직)
+  const calculateBEP = (s) => {
+    const sellPrice = Number(s.productPrice) || 0;
+    const cost = Number(s.cost) || 0;
+    const shippingCost = Number(s.shippingCost) || 0;
+    const giftCost = Number(s.giftCost) || 0;
+    const pgFeeRate = Number(s.pgFeeRate) || 0;
+    const totalMG = Number(s.totalMG) || 0;
+    const agencyMGShareRate = Number(s.agencyMGShareRate) || 0;
+    const rsRate = Number(s.rsRate) || 0;
+
+    const agencyMGShare = Math.round(totalMG * agencyMGShareRate);
+    const ourMGShare = totalMG - agencyMGShare;
+    const pgFee = sellPrice * pgFeeRate;
+    const rsCost = sellPrice * rsRate;
+    const unitMargin = sellPrice - cost - shippingCost - giftCost - pgFee - rsCost;
+    const bepQty = unitMargin > 0 ? Math.ceil(ourMGShare / unitMargin) : null;
+    const bepRevenue = bepQty ? bepQty * sellPrice : null;
+
+    return { unitMargin: Math.round(unitMargin), agencyMGShare, ourMGShare, bepQty, bepRevenue };
   };
 
   const handleAddChannel = async () => {
@@ -159,31 +281,37 @@ export default function YouTubeAnalyzer() {
   const handleSaveSettings = async () => {
     if (!selectedChannel) return;
     try {
-      const response = await fetch(`http://localhost:3001/api/channels/${selectedChannel._id}/settings`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings)
-      });
-      const updated = await response.json();
+      const response = await api.post(`/channels/${selectedChannel._id}/settings`, settings);
+      const updated = response.data;
       setChannels(channels.map(ch => ch._id === selectedChannel._id ? updated : ch));
       setError('✓ 설정이 저장되었습니다');
     } catch (err) {
-      setError('설정 저장 실패');
+      setError('설정 저장 실패: ' + (err.response?.data?.error || err.message));
     }
   };
 
   const handleExportExcel = async () => {
     if (!selectedChannel) return;
     try {
-      const response = await fetch(`http://localhost:3001/api/channels/${selectedChannel._id}/export`);
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
+      const response = await api.get(`/channels/${selectedChannel._id}/export`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(response.data);
       const a = document.createElement('a');
       a.href = url;
       a.download = `PPL_분석_${selectedChannel.channelName}.xlsx`;
       a.click();
     } catch (err) {
-      setError('Excel 다운로드 실패');
+      let msg = err.message;
+      if (err.response?.data instanceof Blob) {
+        try {
+          const text = await err.response.data.text();
+          const parsed = JSON.parse(text);
+          msg = parsed.error || msg;
+        } catch (_) { /* blob이 JSON이 아니면 기본 메시지 사용 */ }
+      } else if (err.response?.data?.error) {
+        msg = err.response.data.error;
+      }
+      console.error('Excel export error:', err);
+      setError('Excel 다운로드 실패: ' + msg);
     }
   };
 
@@ -197,23 +325,44 @@ export default function YouTubeAnalyzer() {
     });
   };
 
+  // PPL 매출/손익 분석 — MG/RS/원가 구조를 반영한 통합 계산
+  // 예상 판매수량(avgViews × 인게이지먼트 × 전환율)에 개당 기여마진을 곱해 순이익을 구하고,
+  // 우리측 MG 부담금(고정비)을 차감한다. (손익/BEP 탭의 calculateBEP와 동일한 원가 기준 사용)
   const calculatePPLRevenue = (videos) => {
     const longformVideos = filterVideos(videos, 'longform');
     if (!longformVideos || longformVideos.length === 0) {
-      return { avgViews: 0, engagement: 0, expectedRevenue: 0, commission: 0, netProfit: 0, roi: 0, roas: 0, riskLevel: '평가 불가' };
+      return { avgViews: 0, engagement: 0, estimatedQty: 0, expectedRevenue: 0, unitMargin: 0, ourMGShare: 0, netProfit: 0, roi: null, roas: null, riskLevel: '평가 불가' };
     }
     const recentVideos = longformVideos.slice(0, 10);
     const engagement = recentVideos.reduce((sum, v) => sum + (parseFloat(v.engagement) || 0), 0) / recentVideos.length / 100;
     const avgViews = recentVideos.reduce((sum, v) => sum + (v.views || 0), 0) / recentVideos.length;
-    const expectedRevenue = avgViews * engagement * settings.expectedConversionRate * settings.productPrice;
-    const commission = expectedRevenue * settings.commissionRate;
-    const netProfit = expectedRevenue - commission - settings.adBudget;
-    const roi = (netProfit / settings.adBudget * 100).toFixed(2);
-    const roas = (expectedRevenue / settings.adBudget * 100).toFixed(2);
+
+    const estimatedQty = avgViews * engagement * settings.expectedConversionRate;
+    const expectedRevenue = estimatedQty * settings.productPrice;
+
+    const bep = calculateBEP(settings);
+    const netProfit = estimatedQty * bep.unitMargin - bep.ourMGShare;
+    const roi = bep.ourMGShare > 0 ? (netProfit / bep.ourMGShare * 100) : null;
+    const roas = bep.ourMGShare > 0 ? (expectedRevenue / bep.ourMGShare * 100) : null;
+
     let riskLevel = '높음';
-    if (roi > 200 && engagement > 0.05) riskLevel = '낮음';
+    if (roi === null) riskLevel = '평가 불가';
+    else if (roi > 200 && engagement > 0.05) riskLevel = '낮음';
     else if (roi > 100 && engagement > 0.02) riskLevel = '중간';
-    return { avgViews: Math.round(avgViews), engagement: (engagement * 100).toFixed(2), expectedRevenue: Math.round(expectedRevenue), commission: Math.round(commission), netProfit: Math.round(netProfit), roi: parseFloat(roi), roas: parseFloat(roas), riskLevel };
+
+    return {
+      avgViews: Math.round(avgViews),
+      engagement: (engagement * 100).toFixed(2),
+      estimatedQty: Math.round(estimatedQty),
+      expectedRevenue: Math.round(expectedRevenue),
+      unitMargin: bep.unitMargin,
+      ourMGShare: bep.ourMGShare,
+      bepQty: bep.bepQty,
+      netProfit: Math.round(netProfit),
+      roi: roi !== null ? parseFloat(roi.toFixed(2)) : null,
+      roas: roas !== null ? parseFloat(roas.toFixed(2)) : null,
+      riskLevel
+    };
   };
 
   const calculateViewTrend = (videos) => {
@@ -288,17 +437,20 @@ export default function YouTubeAnalyzer() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
       <div className="bg-black bg-opacity-50 border-b border-slate-700 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-6 py-6">
-          <div className="flex justify-between items-center">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
             <div>
-              <h1 className="text-3xl font-bold text-white">📊 YouTube PPL 분석기 PRO</h1>
-              <p className="text-slate-400 mt-1">{channels.length}개 채널 분석 중</p>
+              <h1 className="text-xl sm:text-3xl font-bold text-white">📊 YouTube PPL 분석기 PRO</h1>
+              <p className="text-slate-400 mt-1 text-sm sm:text-base">{channels.length}개 채널 분석 중</p>
             </div>
-            <div className="flex gap-3">
-              <button onClick={() => setShowDiscover(!showDiscover)} className={`px-6 py-3 rounded-lg flex items-center gap-2 transition font-semibold ${showDiscover ? 'bg-purple-600 hover:bg-purple-700' : 'bg-slate-700 hover:bg-slate-600'} text-white`}>
+            <div className="flex flex-wrap gap-2 sm:gap-3">
+              <button onClick={() => setShowItemManager(!showItemManager)} className={`flex-1 sm:flex-none justify-center px-3 sm:px-6 py-2 sm:py-3 rounded-lg flex items-center gap-2 transition font-semibold text-sm sm:text-base ${showItemManager ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-slate-700 hover:bg-slate-600'} text-white`}>
+                <Package size={18} /> 품목관리
+              </button>
+              <button onClick={() => setShowDiscover(!showDiscover)} className={`flex-1 sm:flex-none justify-center px-3 sm:px-6 py-2 sm:py-3 rounded-lg flex items-center gap-2 transition font-semibold text-sm sm:text-base ${showDiscover ? 'bg-purple-600 hover:bg-purple-700' : 'bg-slate-700 hover:bg-slate-600'} text-white`}>
                 🔍 채널 발굴
               </button>
-              <button onClick={() => setShowAddForm(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg flex items-center gap-2 transition" disabled={loading}>
+              <button onClick={() => setShowAddForm(true)} className="flex-1 sm:flex-none justify-center bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-6 py-2 sm:py-3 rounded-lg flex items-center gap-2 transition text-sm sm:text-base" disabled={loading}>
                 <Plus size={20} /> 채널 추가
               </button>
             </div>
@@ -306,11 +458,83 @@ export default function YouTubeAnalyzer() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
+      <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
         {error && (
-          <div className={`mb-6 p-4 rounded-lg ${error.includes('✓') ? 'bg-green-900 text-green-200 border border-green-700' : 'bg-red-900 text-red-200 border border-red-700'}`}>
+          <div className={`mb-6 p-4 rounded-lg text-sm sm:text-base ${error.includes('✓') ? 'bg-green-900 text-green-200 border border-green-700' : 'bg-red-900 text-red-200 border border-red-700'}`}>
             {error}
             <button onClick={() => setError(null)} className="float-right text-lg">✕</button>
+          </div>
+        )}
+
+        {showItemManager && (
+          <div className="bg-slate-800 border border-emerald-700 rounded-lg p-6 mb-8">
+            <h2 className="text-xl font-bold text-white mb-1">📦 품목 관리</h2>
+            <p className="text-slate-400 text-sm mb-4">PPL에 사용할 제품의 판매가·원가·배송비·사은품 비용을 등록해두면, 채널 설정에서 불러와 손익을 계산할 수 있습니다</p>
+
+            <div className="bg-slate-700 border border-slate-600 rounded-lg p-4 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 mb-3">
+                <div className="col-span-2 md:col-span-1">
+                  <label className="block text-slate-300 text-xs mb-1">품목명</label>
+                  <input type="text" value={itemForm.name} onChange={e => setItemForm({ ...itemForm, name: e.target.value })} placeholder="예: 제스파 안마기 A" className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                </div>
+                <div>
+                  <label className="block text-slate-300 text-xs mb-1">판매가 (원)</label>
+                  <input type="number" value={itemForm.sellPrice} onChange={e => setItemForm({ ...itemForm, sellPrice: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                </div>
+                <div>
+                  <label className="block text-slate-300 text-xs mb-1">원가 (원)</label>
+                  <input type="number" value={itemForm.cost} onChange={e => setItemForm({ ...itemForm, cost: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                </div>
+                <div>
+                  <label className="block text-slate-300 text-xs mb-1">배송비 (원)</label>
+                  <input type="number" value={itemForm.shippingCost} onChange={e => setItemForm({ ...itemForm, shippingCost: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                </div>
+                <div>
+                  <label className="block text-slate-300 text-xs mb-1">사은품 비용 (원)</label>
+                  <input type="number" value={itemForm.giftCost} onChange={e => setItemForm({ ...itemForm, giftCost: e.target.value })} className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                </div>
+                <div className="col-span-2 md:col-span-1">
+                  <label className="block text-slate-300 text-xs mb-1">메모</label>
+                  <input type="text" value={itemForm.memo} onChange={e => setItemForm({ ...itemForm, memo: e.target.value })} placeholder="선택사항" className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={handleSaveItem} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded text-sm font-semibold transition">
+                  {editingItemId ? '수정 저장' : '+ 품목 등록'}
+                </button>
+                {editingItemId && (
+                  <button onClick={resetItemForm} className="bg-slate-600 hover:bg-slate-500 text-white px-4 py-2 rounded text-sm transition">취소</button>
+                )}
+              </div>
+            </div>
+
+            {items.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b border-slate-600"><tr className="text-slate-300"><th className="text-left p-2">품목명</th><th className="text-right p-2">판매가</th><th className="text-right p-2">원가</th><th className="text-right p-2">배송비</th><th className="text-right p-2">사은품</th><th className="text-left p-2">메모</th><th className="text-center p-2">관리</th></tr></thead>
+                  <tbody>
+                    {items.map(item => (
+                      <tr key={item._id} className="border-b border-slate-700 hover:bg-slate-700 transition">
+                        <td className="p-2 text-white font-semibold">{item.name}</td>
+                        <td className="text-right p-2 text-slate-200">{(item.sellPrice || 0).toLocaleString()}원</td>
+                        <td className="text-right p-2 text-slate-400">{(item.cost || 0).toLocaleString()}원</td>
+                        <td className="text-right p-2 text-slate-400">{(item.shippingCost || 0).toLocaleString()}원</td>
+                        <td className="text-right p-2 text-slate-400">{(item.giftCost || 0).toLocaleString()}원</td>
+                        <td className="p-2 text-slate-500 truncate max-w-xs">{item.memo}</td>
+                        <td className="text-center p-2">
+                          <div className="flex gap-1 justify-center">
+                            <button onClick={() => handleEditItem(item)} className="text-blue-400 hover:text-blue-300 p-1"><Pencil size={14} /></button>
+                            <button onClick={() => handleDeleteItem(item._id)} className="text-red-400 hover:text-red-300 p-1"><Trash2 size={14} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-slate-400 text-center py-6 text-sm">등록된 품목이 없습니다. 위에서 첫 품목을 등록하세요.</p>
+            )}
           </div>
         )}
 
@@ -318,7 +542,7 @@ export default function YouTubeAnalyzer() {
           <div className="bg-slate-800 border border-purple-700 rounded-lg p-6 mb-8">
             <h2 className="text-xl font-bold text-white mb-1">🔍 PPL 채널 발굴</h2>
             <p className="text-slate-400 text-sm mb-4">키워드로 유튜브 채널을 검색하고 제스파 안마기 PPL 적합도를 자동으로 분석합니다</p>
-            <div className="flex gap-3 mb-2">
+            <div className="flex flex-col sm:flex-row gap-3 mb-2">
               <input
                 type="text"
                 value={discoverKeyword}
@@ -327,7 +551,7 @@ export default function YouTubeAnalyzer() {
                 placeholder="예: 안마기 리뷰, 홈케어, 직장인 피로회복, 헬스 루틴"
                 className="flex-1 bg-slate-700 border border-slate-600 rounded px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:border-purple-500"
               />
-              <button onClick={handleDiscover} disabled={discovering} className="bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white px-6 py-3 rounded transition flex items-center gap-2 font-semibold">
+              <button onClick={handleDiscover} disabled={discovering} className="bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white px-6 py-3 rounded transition flex items-center justify-center gap-2 font-semibold">
                 {discovering ? <><Loader size={16} className="animate-spin" /> 분석 중...</> : '검색'}
               </button>
             </div>
@@ -341,9 +565,9 @@ export default function YouTubeAnalyzer() {
                   const scoreBadge = ch.pplScore >= 70 ? '✅ 강추' : ch.pplScore >= 40 ? '⚠️ 검토' : '❌ 비적합';
                   const alreadyAdded = channels.some(c => c.channelId === ch.channelId);
                   return (
-                    <div key={ch.channelId} className="bg-slate-700 border border-slate-600 rounded-lg p-4 flex gap-4 items-start">
-                      {ch.thumbnail && <img src={ch.thumbnail} alt="" className="w-16 h-16 rounded-full object-cover flex-shrink-0" />}
-                      <div className="flex-1 min-w-0">
+                    <div key={ch.channelId} className="bg-slate-700 border border-slate-600 rounded-lg p-4 flex flex-col sm:flex-row gap-3 sm:gap-4 items-start">
+                      {ch.thumbnail && <img src={ch.thumbnail} alt="" className="w-12 h-12 sm:w-16 sm:h-16 rounded-full object-cover flex-shrink-0" />}
+                      <div className="flex-1 min-w-0 w-full">
                         <div className="flex items-center gap-2 mb-1 flex-wrap">
                           <span className="font-bold text-white truncate">{idx + 1}. {ch.channelName}</span>
                           {ch.country === 'KR' && <span className="text-xs bg-blue-800 text-blue-200 px-2 py-0.5 rounded">🇰🇷 한국</span>}
@@ -356,13 +580,15 @@ export default function YouTubeAnalyzer() {
                         </div>
                         {ch.description && <p className="text-xs text-slate-500 truncate">{ch.description}</p>}
                       </div>
-                      <div className="flex flex-col items-center gap-2 flex-shrink-0">
-                        <div className={`text-2xl font-bold px-3 py-1 rounded-lg ${scoreColor}`}>{ch.pplScore}점</div>
-                        <div className={`text-xs font-semibold ${scoreColor.split(' ')[0]}`}>{scoreBadge}</div>
+                      <div className="flex sm:flex-col items-center gap-3 sm:gap-2 flex-shrink-0 w-full sm:w-auto justify-between sm:justify-start">
+                        <div className="flex items-center gap-2 sm:flex-col">
+                          <div className={`text-2xl font-bold px-3 py-1 rounded-lg ${scoreColor}`}>{ch.pplScore}점</div>
+                          <div className={`text-xs font-semibold ${scoreColor.split(' ')[0]}`}>{scoreBadge}</div>
+                        </div>
                         {alreadyAdded ? (
-                          <span className="text-xs text-slate-500 mt-1">추가됨 ✓</span>
+                          <span className="text-xs text-slate-500 sm:mt-1">추가됨 ✓</span>
                         ) : (
-                          <button onClick={() => handleAddChannelById(ch.channelId, ch.channelName)} disabled={loading} className="mt-1 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white text-xs px-3 py-1.5 rounded transition">
+                          <button onClick={() => handleAddChannelById(ch.channelId, ch.channelName)} disabled={loading} className="sm:mt-1 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white text-xs px-3 py-1.5 rounded transition whitespace-nowrap">
                             + 분석 추가
                           </button>
                         )}
@@ -378,13 +604,15 @@ export default function YouTubeAnalyzer() {
         {showAddForm && (
           <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 mb-8">
             <h2 className="text-xl font-bold text-white mb-4">유튜브 채널 추가</h2>
-            <div className="flex gap-4">
+            <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
               <input type="text" placeholder="예: @MrBeast" value={channelInput} onChange={(e) => setChannelInput(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleAddChannel()} className="flex-1 bg-slate-700 border border-slate-600 rounded px-4 py-3 text-white placeholder-slate-400 focus:outline-none focus:border-blue-500" disabled={loading} />
-              <button onClick={handleAddChannel} disabled={loading} className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white px-6 py-3 rounded transition flex items-center gap-2">
-                {loading ? <Loader size={16} className="animate-spin" /> : <Plus size={16} />}
-                {loading ? '추가중...' : '추가'}
-              </button>
-              <button onClick={() => setShowAddForm(false)} className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-3 rounded transition" disabled={loading}>닫기</button>
+              <div className="flex gap-3">
+                <button onClick={handleAddChannel} disabled={loading} className="flex-1 sm:flex-none justify-center bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white px-6 py-3 rounded transition flex items-center gap-2">
+                  {loading ? <Loader size={16} className="animate-spin" /> : <Plus size={16} />}
+                  {loading ? '추가중...' : '추가'}
+                </button>
+                <button onClick={() => setShowAddForm(false)} className="flex-1 sm:flex-none bg-slate-700 hover:bg-slate-600 text-white px-6 py-3 rounded transition" disabled={loading}>닫기</button>
+              </div>
             </div>
           </div>
         )}
@@ -424,9 +652,9 @@ export default function YouTubeAnalyzer() {
             {selectedChannel && (
               <div className="lg:col-span-2 space-y-6">
                 <div className="flex gap-2 border-b border-slate-700 overflow-x-auto">
-                  {['summary', 'longform', 'mid', 'shorts', 'settings', 'trends', 'export'].map(tab => (
+                  {['summary', 'longform', 'mid', 'shorts', 'settings', 'bep', 'trends', 'export'].map(tab => (
                     <button key={tab} onClick={() => setActiveTab(tab)} className={`px-4 py-2 font-semibold transition whitespace-nowrap ${activeTab === tab ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-400 hover:text-slate-300'}`}>
-                      {tab === 'summary' && '📊 요약'} {tab === 'longform' && '🎬 롱폼(10분↑)'} {tab === 'mid' && '▶️ 미드폼(1~10분)'} {tab === 'shorts' && '📱 숏폼(60초↓)'} {tab === 'settings' && '⚙️ 설정'} {tab === 'trends' && '📈 트렌드'} {tab === 'export' && '📥 내보내기'}
+                      {tab === 'summary' && '📊 요약'} {tab === 'longform' && '🎬 롱폼(10분↑)'} {tab === 'mid' && '▶️ 미드폼(1~10분)'} {tab === 'shorts' && '📱 숏폼(60초↓)'} {tab === 'settings' && '⚙️ 설정'} {tab === 'bep' && '💰 손익/BEP'} {tab === 'trends' && '📈 트렌드'} {tab === 'export' && '📥 내보내기'}
                     </button>
                   ))}
                 </div>
@@ -442,19 +670,24 @@ export default function YouTubeAnalyzer() {
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">평균 조회수</p><p className="text-2xl font-bold text-white mt-1">{(pplData.avgViews/1000).toFixed(0)}K</p></div>
                     </div>
                     <div className="bg-gradient-to-br from-blue-900 to-blue-800 border border-blue-600 rounded-lg p-6">
-                      <h3 className="text-xl font-bold text-white mb-4">💰 PPL 매출 분석</h3>
-                      <div className="grid grid-cols-2 gap-4">
+                      <h3 className="text-xl font-bold text-white mb-1">💰 PPL 매출 분석</h3>
+                      <p className="text-blue-200 text-xs mb-4">원가·MG·RS 반영 (설정 탭에서 입력) — 광고비/수수료율 대신 실제 딜 구조 기준</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div className="bg-slate-800 rounded p-4"><p className="text-slate-300 text-sm">상품 객단가</p><p className="text-xl font-bold text-blue-300">{settings.productPrice.toLocaleString()}원</p></div>
-                        <div className="bg-slate-800 rounded p-4"><p className="text-slate-300 text-sm">광고비</p><p className="text-xl font-bold text-blue-300">{settings.adBudget.toLocaleString()}원</p></div>
-                        <div className="bg-slate-800 rounded p-4"><InfoTooltip content="= 평균조회수 × 인게이지먼트 × 전환율(3%) × 상품가"><p className="text-slate-300 text-sm">📊 예상 매출</p><p className="text-xl font-bold text-green-400">{pplData.expectedRevenue?.toLocaleString()}원</p></InfoTooltip></div>
-                        <div className="bg-slate-800 rounded p-4"><InfoTooltip content={`= 예상매출 × 수수료율(${settings.commissionRate*100}%)`}><p className="text-slate-300 text-sm">💸 수수료</p><p className="text-xl font-bold text-yellow-400">{pplData.commission?.toLocaleString()}원</p></InfoTooltip></div>
-                        <div className="bg-slate-800 rounded p-4"><InfoTooltip content="= 예상매출 - 수수료 - 광고비"><p className="text-slate-300 text-sm">💵 순이익</p><p className={`text-xl font-bold ${pplData.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pplData.netProfit?.toLocaleString()}원</p></InfoTooltip></div>
-                        <div className="bg-slate-800 rounded p-4"><InfoTooltip content="= 예상매출 / 광고비 × 100%"><p className="text-slate-300 text-sm">📈 ROAS</p><p className="text-xl font-bold text-purple-400">{pplData.roas}%</p></InfoTooltip></div>
-                        <div className="bg-slate-800 rounded p-4"><InfoTooltip content="= 순이익 / 광고비 × 100%"><p className="text-slate-300 text-sm">🎯 ROI</p><p className="text-xl font-bold text-cyan-400">{pplData.roi}%</p></InfoTooltip></div>
+                        <div className="bg-slate-800 rounded p-4"><InfoTooltip content="= 총 MG − 대행사(쇼크) MG 분담금. 판매 마진으로 회수해야 하는 고정비"><p className="text-slate-300 text-sm">우리측 MG 부담금</p></InfoTooltip><p className="text-xl font-bold text-blue-300">{pplData.ourMGShare?.toLocaleString()}원</p></div>
+                        <div className="bg-slate-800 rounded p-4"><InfoTooltip content="= 평균조회수 × 인게이지먼트 × 전환율"><p className="text-slate-300 text-sm">📦 예상 판매수량</p><p className="text-xl font-bold text-white">{pplData.estimatedQty?.toLocaleString()}개</p></InfoTooltip></div>
+                        <div className="bg-slate-800 rounded p-4"><InfoTooltip content="= 예상 판매수량 × 상품 객단가"><p className="text-slate-300 text-sm">📊 예상 매출</p><p className="text-xl font-bold text-green-400">{pplData.expectedRevenue?.toLocaleString()}원</p></InfoTooltip></div>
+                        <div className="bg-slate-800 rounded p-4"><InfoTooltip content="= 판매가 − 원가 − 배송비 − 사은품 − PG수수료 − RS비용"><p className="text-slate-300 text-sm">개당 기여마진</p><p className={`text-xl font-bold ${pplData.unitMargin >= 0 ? 'text-white' : 'text-red-400'}`}>{pplData.unitMargin?.toLocaleString()}원</p></InfoTooltip></div>
+                        <div className="bg-slate-800 rounded p-4"><InfoTooltip content="= 예상 판매수량 × 개당 기여마진 − 우리측 MG 부담금"><p className="text-slate-300 text-sm">💵 순이익</p><p className={`text-xl font-bold ${pplData.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pplData.netProfit?.toLocaleString()}원</p></InfoTooltip></div>
+                        <div className="bg-slate-800 rounded p-4"><InfoTooltip content="= 예상매출 / 우리측 MG 부담금 × 100%"><p className="text-slate-300 text-sm">📈 ROAS</p><p className="text-xl font-bold text-purple-400">{pplData.roas !== null ? `${pplData.roas}%` : '계산 불가'}</p></InfoTooltip></div>
+                        <div className="bg-slate-800 rounded p-4"><InfoTooltip content="= 순이익 / 우리측 MG 부담금 × 100%"><p className="text-slate-300 text-sm">🎯 ROI</p><p className="text-xl font-bold text-cyan-400">{pplData.roi !== null ? `${pplData.roi}%` : '계산 불가'}</p></InfoTooltip></div>
                       </div>
                       <div className={`p-4 rounded text-center font-bold text-lg mt-4 ${pplData.riskLevel === '낮음' ? 'bg-green-600 text-green-100' : pplData.riskLevel === '중간' ? 'bg-yellow-600 text-yellow-100' : 'bg-red-600 text-red-100'}`}>
-                        위험도: {pplData.riskLevel} {pplData.riskLevel === '낮음' ? '✅ 강추' : pplData.riskLevel === '중간' ? '⚠️ 검토' : '❌ 신중'}
+                        위험도: {pplData.riskLevel} {pplData.riskLevel === '낮음' ? '✅ 강추' : pplData.riskLevel === '중간' ? '⚠️ 검토' : pplData.riskLevel === '평가 불가' ? '' : '❌ 신중'}
                       </div>
+                      {pplData.bepQty !== null && pplData.bepQty !== undefined && (
+                        <p className="text-blue-200 text-xs mt-3 text-center">BEP 판매수량 {pplData.bepQty?.toLocaleString()}개 대비 예상 판매수량 {pplData.estimatedQty?.toLocaleString()}개 {pplData.estimatedQty >= pplData.bepQty ? '— BEP 달성 예상 ✅' : '— BEP 미달 예상 ⚠️'}</p>
+                      )}
                     </div>
 
                     {/* 조회수 트렌드 섹션 */}
@@ -681,14 +914,96 @@ export default function YouTubeAnalyzer() {
                   <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
                     <h3 className="text-lg font-bold text-white mb-4">⚙️ PPL 설정</h3>
                     <div className="space-y-4">
-                      <div><label className="block text-slate-300 text-sm mb-2">상품 객단가 (원)</label><input type="number" value={settings.productPrice} onChange={(e) => setSettings({...settings, productPrice: parseInt(e.target.value)})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
+                      <div>
+                        <label className="block text-slate-300 text-sm mb-2">📦 품목 불러오기</label>
+                        <select value={settings.itemId || ''} onChange={(e) => handleSelectItem(e.target.value)} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500">
+                          <option value="">직접 입력 (품목 미선택)</option>
+                          {items.map(item => (
+                            <option key={item._id} value={item._id}>{item.name} — {(item.sellPrice || 0).toLocaleString()}원</option>
+                          ))}
+                        </select>
+                        {items.length === 0 && <p className="text-xs text-slate-500 mt-1">등록된 품목이 없습니다. 상단 "📦 품목관리"에서 먼저 등록하세요.</p>}
+                      </div>
+                      <div><label className="block text-slate-300 text-sm mb-2">상품 객단가 / 판매가 (원)</label><input type="number" value={settings.productPrice} onChange={(e) => setSettings({...settings, productPrice: parseInt(e.target.value)})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
                       <div><label className="block text-slate-300 text-sm mb-2">광고비 (원)</label><input type="number" value={settings.adBudget} onChange={(e) => setSettings({...settings, adBudget: parseInt(e.target.value)})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
                       <div><label className="block text-slate-300 text-sm mb-2">예상 전환율 (%)</label><input type="number" step="0.01" value={settings.expectedConversionRate * 100} onChange={(e) => setSettings({...settings, expectedConversionRate: parseFloat(e.target.value) / 100})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
                       <div><label className="block text-slate-300 text-sm mb-2">수수료율 (%)</label><input type="number" step="0.01" value={settings.commissionRate * 100} onChange={(e) => setSettings({...settings, commissionRate: parseFloat(e.target.value) / 100})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
+
+                      <div className="border-t border-slate-700 pt-4 mt-2">
+                        <h4 className="text-slate-200 font-semibold mb-3">💰 손익/BEP 계산용 원가 정보</h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div><label className="block text-slate-300 text-xs mb-1">원가 (원)</label><input type="number" value={settings.cost} onChange={(e) => setSettings({...settings, cost: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                          <div><label className="block text-slate-300 text-xs mb-1">배송비 (원)</label><input type="number" value={settings.shippingCost} onChange={(e) => setSettings({...settings, shippingCost: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                          <div><label className="block text-slate-300 text-xs mb-1">사은품 비용 (원)</label><input type="number" value={settings.giftCost} onChange={(e) => setSettings({...settings, giftCost: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                        </div>
+                        <div className="mt-3">
+                          <label className="block text-slate-300 text-xs mb-1">PG(결제) 수수료율 (%)</label>
+                          <input type="number" step="0.01" value={settings.pgFeeRate * 100} onChange={(e) => setSettings({...settings, pgFeeRate: parseFloat(e.target.value) / 100 || 0})} className="w-full md:w-1/3 bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                        </div>
+                      </div>
+
+                      <div className="border-t border-slate-700 pt-4 mt-2">
+                        <h4 className="text-slate-200 font-semibold mb-3">🤝 MG / RS 딜 구조 (쇼크 대행)</h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div><label className="block text-slate-300 text-xs mb-1">총 MG 비용 (원)</label><input type="number" value={settings.totalMG} onChange={(e) => setSettings({...settings, totalMG: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                          <div><label className="block text-slate-300 text-xs mb-1">대행사 MG 분담율 (%)</label><input type="number" step="1" value={settings.agencyMGShareRate * 100} onChange={(e) => setSettings({...settings, agencyMGShareRate: parseFloat(e.target.value) / 100 || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                          <div><label className="block text-slate-300 text-xs mb-1">RS율 (%, 대행사 지급)</label><input type="number" step="1" value={settings.rsRate * 100} onChange={(e) => setSettings({...settings, rsRate: parseFloat(e.target.value) / 100 || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-2">예: 총 MG 1,000만원, RS 20% 합의 시 대행사가 MG의 30%(300만원)를 분담 → 대행사 MG 분담율 30 입력</p>
+                      </div>
+
                       <div className="flex gap-4 pt-4"><button onClick={handleSaveSettings} className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded transition font-semibold">저장</button><button onClick={() => setActiveTab('summary')} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded transition">취소</button></div>
                     </div>
                   </div>
                 )}
+
+                {activeTab === 'bep' && (() => {
+                  const bep = calculateBEP(settings);
+                  return (
+                    <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+                      <h3 className="text-lg font-bold text-white mb-1">💰 손익 / BEP 분석</h3>
+                      <p className="text-slate-400 text-sm mb-4">{settings.itemName ? `품목: ${settings.itemName}` : '품목 미선택 — 설정 탭에서 원가 정보를 입력하세요'}</p>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                        <div className="bg-slate-700 rounded p-4">
+                          <p className="text-slate-400 text-sm">총 MG 비용</p>
+                          <p className="text-xl font-bold text-white mt-1">{(settings.totalMG || 0).toLocaleString()}원</p>
+                        </div>
+                        <div className="bg-slate-700 rounded p-4">
+                          <InfoTooltip content="= 총 MG × 대행사 MG 분담율"><p className="text-slate-400 text-sm">대행사(쇼크) MG 분담금</p></InfoTooltip>
+                          <p className="text-xl font-bold text-purple-400 mt-1">{bep.agencyMGShare.toLocaleString()}원</p>
+                        </div>
+                        <div className="bg-slate-700 rounded p-4 col-span-2">
+                          <InfoTooltip content="= 총 MG - 대행사 분담금. 이 금액을 판매 마진으로 회수해야 손익분기(BEP)입니다"><p className="text-slate-400 text-sm">우리측 MG 부담금</p></InfoTooltip>
+                          <p className="text-2xl font-bold text-yellow-400 mt-1">{bep.ourMGShare.toLocaleString()}원</p>
+                        </div>
+                      </div>
+
+                      <div className="bg-gradient-to-br from-blue-900 to-blue-800 border border-blue-600 rounded-lg p-6">
+                        <h3 className="text-xl font-bold text-white mb-4">📉 손익분기점(BEP)</h3>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="bg-slate-800 rounded p-4">
+                            <InfoTooltip content="= 판매가 - 원가 - 배송비 - 사은품 - PG수수료 - RS비용 (한 개 팔 때마다 남는 마진)"><p className="text-slate-300 text-sm">개당 기여마진</p></InfoTooltip>
+                            <p className={`text-xl font-bold mt-1 ${bep.unitMargin > 0 ? 'text-green-400' : 'text-red-400'}`}>{bep.unitMargin.toLocaleString()}원</p>
+                          </div>
+                          <div className="bg-slate-800 rounded p-4">
+                            <InfoTooltip content="= 우리측 MG 부담금 ÷ 개당 기여마진"><p className="text-slate-300 text-sm">🎯 BEP 판매수량</p></InfoTooltip>
+                            <p className="text-xl font-bold text-cyan-400 mt-1">{bep.bepQty !== null ? `${bep.bepQty.toLocaleString()}개` : '계산 불가'}</p>
+                          </div>
+                          <div className="bg-slate-800 rounded p-4 col-span-2">
+                            <InfoTooltip content="= BEP 판매수량 × 판매가"><p className="text-slate-300 text-sm">🎯 BEP 매출</p></InfoTooltip>
+                            <p className="text-xl font-bold text-green-400 mt-1">{bep.bepRevenue !== null ? `${bep.bepRevenue.toLocaleString()}원` : '계산 불가'}</p>
+                          </div>
+                        </div>
+                        {bep.unitMargin <= 0 && (
+                          <div className="mt-4 p-3 bg-red-900 border border-red-700 rounded text-red-200 text-sm">
+                            ⚠️ 개당 기여마진이 0원 이하입니다. 판매가, 원가, RS율 등을 다시 확인하세요.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {activeTab === 'trends' && (
                   <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">

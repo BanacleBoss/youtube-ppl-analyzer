@@ -37,4 +37,25 @@ export const searchChannels = async (keyword) => {
   return response.data;
 };
 
+// 품목 관리
+export const getItems = async () => {
+  const response = await api.get('/items');
+  return response.data;
+};
+
+export const addItem = async (item) => {
+  const response = await api.post('/items', item);
+  return response.data;
+};
+
+export const updateItem = async (itemId, item) => {
+  const response = await api.put(`/items/${itemId}`, item);
+  return response.data;
+};
+
+export const deleteItem = async (itemId) => {
+  const response = await api.delete(`/items/${itemId}`);
+  return response.data;
+};
+
 export default api;

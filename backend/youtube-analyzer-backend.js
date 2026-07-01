@@ -6,6 +6,15 @@ const cors = require('cors');
 const ExcelJS = require('exceljs');
 require('dotenv').config();
 
+// 일부 네트워크(ISP/방화벽)에서 mongodb+srv의 DNS SRV 조회가 차단되는 경우가 있어
+// Node의 DNS 리졸버를 명시적으로 지정해 우회한다.
+const dns = require('dns');
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
+} catch (e) {
+  console.warn('DNS 서버 설정 실패:', e.message);
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -22,7 +31,20 @@ const channelSchema = new mongoose.Schema({
     adBudget: { type: Number, default: 1000000 },
     expectedConversionRate: { type: Number, default: 0.03 },
     commissionRate: { type: Number, default: 0.1 },
-    targetROI: { type: Number, default: 3 }
+    targetROI: { type: Number, default: 3 },
+
+    // 품목/손익 관련 (BEP 계산용)
+    itemId: { type: mongoose.Schema.Types.ObjectId, ref: 'Item', default: null },
+    itemName: { type: String, default: '' },
+    cost: { type: Number, default: 0 },            // 원가
+    shippingCost: { type: Number, default: 0 },     // 배송비
+    giftCost: { type: Number, default: 0 },         // 사은품 비용
+    pgFeeRate: { type: Number, default: 0.0385 },    // PG(결제) 수수료율
+
+    // MG / RS 딜 구조
+    totalMG: { type: Number, default: 0 },           // 총 MG(최소보장금) 비용
+    agencyMGShareRate: { type: Number, default: 0.3 }, // 대행사(쇼크) MG 분담 비율
+    rsRate: { type: Number, default: 0.2 }            // 대행사에 지급하는 RS(매출 성과 배분) 비율
   },
   
   // 일일 누적 통계
@@ -75,6 +97,98 @@ const channelSchema = new mongoose.Schema({
 });
 
 const Channel = mongoose.model('Channel', channelSchema);
+
+// 품목(제품) 마스터 스키마
+const itemSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  sellPrice: { type: Number, default: 0 },     // 판매가
+  cost: { type: Number, default: 0 },          // 원가
+  shippingCost: { type: Number, default: 0 },  // 배송비
+  giftCost: { type: Number, default: 0 },      // 사은품 비용 (기본값)
+  memo: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+const Item = mongoose.model('Item', itemSchema);
+
+// PPL 손익/BEP 계산 유틸
+function calculatePPLProfit(settings) {
+  const sellPrice = Number(settings.productPrice) || 0;
+  const cost = Number(settings.cost) || 0;
+  const shippingCost = Number(settings.shippingCost) || 0;
+  const giftCost = Number(settings.giftCost) || 0;
+  const pgFeeRate = Number(settings.pgFeeRate) || 0;
+  const totalMG = Number(settings.totalMG) || 0;
+  const agencyMGShareRate = Number(settings.agencyMGShareRate) || 0;
+  const rsRate = Number(settings.rsRate) || 0;
+
+  const agencyMGShare = Math.round(totalMG * agencyMGShareRate);
+  const ourMGShare = totalMG - agencyMGShare;
+
+  const pgFee = sellPrice * pgFeeRate;
+  const rsCost = sellPrice * rsRate;
+  const unitMargin = sellPrice - cost - shippingCost - giftCost - pgFee - rsCost;
+
+  const bepQty = unitMargin > 0 ? Math.ceil(ourMGShare / unitMargin) : null;
+  const bepRevenue = bepQty ? bepQty * sellPrice : null;
+
+  return {
+    sellPrice,
+    unitMargin: Math.round(unitMargin),
+    totalMG,
+    agencyMGShare,
+    ourMGShare,
+    bepQty,
+    bepRevenue: bepRevenue ? Math.round(bepRevenue) : null
+  };
+}
+
+// PPL 매출/손익 요약 계산 (프론트엔드 calculatePPLRevenue와 동일 기준으로 통일)
+// 롱폼(10분↑) 영상 중 최근 10개를 기준으로 예상 판매수량/매출/순이익/ROI/ROAS를 계산한다.
+function calculatePPLSummary(videos, settings) {
+  const longform = (videos || []).filter(v => (v.duration || 0) > 600);
+  const recent = longform.slice(0, 10);
+
+  if (recent.length === 0) {
+    return {
+      avgViews: 0, engagement: 0, estimatedQty: 0, expectedRevenue: 0,
+      unitMargin: 0, ourMGShare: 0, agencyMGShare: 0, netProfit: 0,
+      roi: null, roas: null, riskLevel: '평가 불가', bepQty: null, bepRevenue: null
+    };
+  }
+
+  const engagement = recent.reduce((sum, v) => sum + (parseFloat(v.engagement) || 0), 0) / recent.length / 100;
+  const avgViews = recent.reduce((sum, v) => sum + (v.views || 0), 0) / recent.length;
+  const estimatedQty = avgViews * engagement * (settings.expectedConversionRate || 0);
+  const expectedRevenue = estimatedQty * (settings.productPrice || 0);
+
+  const profit = calculatePPLProfit(settings);
+  const netProfit = estimatedQty * profit.unitMargin - profit.ourMGShare;
+  const roi = profit.ourMGShare > 0 ? (netProfit / profit.ourMGShare * 100) : null;
+  const roas = profit.ourMGShare > 0 ? (expectedRevenue / profit.ourMGShare * 100) : null;
+
+  let riskLevel = '높음';
+  if (roi === null) riskLevel = '평가 불가';
+  else if (roi > 200 && engagement > 0.05) riskLevel = '낮음';
+  else if (roi > 100 && engagement > 0.02) riskLevel = '중간';
+
+  return {
+    avgViews: Math.round(avgViews),
+    engagement: parseFloat((engagement * 100).toFixed(2)),
+    estimatedQty: Math.round(estimatedQty),
+    expectedRevenue: Math.round(expectedRevenue),
+    unitMargin: profit.unitMargin,
+    ourMGShare: profit.ourMGShare,
+    agencyMGShare: profit.agencyMGShare,
+    netProfit: Math.round(netProfit),
+    roi: roi !== null ? parseFloat(roi.toFixed(2)) : null,
+    roas: roas !== null ? parseFloat(roas.toFixed(2)) : null,
+    riskLevel,
+    bepQty: profit.bepQty,
+    bepRevenue: profit.bepRevenue
+  };
+}
 
 class YouTubeAnalyzer {
   constructor(apiKey) {
@@ -256,11 +370,13 @@ app.post('/api/channels', async (req, res) => {
     const channelInfo = await analyzer.getChannelInfo(channelId);
     const videos = await analyzer.getChannelVideos(channelInfo.channelId);
 
-    const pplData = analyzer.calculatePPLRevenue(videos, {
+    const pplData = calculatePPLSummary(videos, {
       productPrice: 50000,
       adBudget: 1000000,
       expectedConversionRate: 0.03,
-      commissionRate: 0.1
+      commissionRate: 0.1,
+      cost: 0, shippingCost: 0, giftCost: 0, pgFeeRate: 0.0385,
+      totalMG: 0, agencyMGShareRate: 0.3, rsRate: 0.2
     });
 
     const channel = new Channel({
@@ -340,7 +456,7 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
       !channel.videos.some(existing => existing.videoId === v.videoId)
     );
 
-    const pplData = analyzer.calculatePPLRevenue(videos, channel.pplSettings);
+    const pplData = calculatePPLSummary(videos, channel.pplSettings);
     const today = new Date().toISOString().split('T')[0];
     const todayStats = channel.dailyStats.find(d => d.date === today);
 
@@ -399,11 +515,22 @@ app.post('/api/channels/:id/settings', async (req, res) => {
       adBudget: req.body.adBudget || 1000000,
       expectedConversionRate: req.body.expectedConversionRate || 0.03,
       commissionRate: req.body.commissionRate || 0.1,
-      targetROI: req.body.targetROI || 3
+      targetROI: req.body.targetROI || 3,
+
+      itemId: req.body.itemId || null,
+      itemName: req.body.itemName || '',
+      cost: req.body.cost || 0,
+      shippingCost: req.body.shippingCost || 0,
+      giftCost: req.body.giftCost || 0,
+      pgFeeRate: req.body.pgFeeRate ?? 0.0385,
+
+      totalMG: req.body.totalMG || 0,
+      agencyMGShareRate: req.body.agencyMGShareRate ?? 0.3,
+      rsRate: req.body.rsRate ?? 0.2
     };
 
     // 새로운 설정으로 PPL 계산 업데이트
-    const pplData = analyzer.calculatePPLRevenue(channel.videos, channel.pplSettings);
+    const pplData = calculatePPLSummary(channel.videos, channel.pplSettings);
     const today = new Date().toISOString().split('T')[0];
     const todayStatIndex = channel.dailyStats.findIndex(d => d.date === today);
 
@@ -434,6 +561,71 @@ app.delete('/api/channels/:id', async (req, res) => {
   }
 });
 
+// ===== 품목(제품) 관리 API =====
+
+// POST: 품목 추가
+app.post('/api/items', async (req, res) => {
+  try {
+    const { name, sellPrice, cost, shippingCost, giftCost, memo } = req.body;
+    if (!name) return res.status(400).json({ error: '품목명을 입력하세요' });
+
+    const item = new Item({
+      name,
+      sellPrice: sellPrice || 0,
+      cost: cost || 0,
+      shippingCost: shippingCost || 0,
+      giftCost: giftCost || 0,
+      memo: memo || ''
+    });
+    await item.save();
+    res.json(item);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET: 품목 목록 조회
+app.get('/api/items', async (req, res) => {
+  try {
+    const items = await Item.find().sort({ name: 1 });
+    res.json(items);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT: 품목 수정
+app.put('/api/items/:id', async (req, res) => {
+  try {
+    const { name, sellPrice, cost, shippingCost, giftCost, memo } = req.body;
+    const item = await Item.findById(req.params.id);
+    if (!item) return res.status(404).json({ error: '품목을 찾을 수 없습니다' });
+
+    if (name !== undefined) item.name = name;
+    if (sellPrice !== undefined) item.sellPrice = sellPrice;
+    if (cost !== undefined) item.cost = cost;
+    if (shippingCost !== undefined) item.shippingCost = shippingCost;
+    if (giftCost !== undefined) item.giftCost = giftCost;
+    if (memo !== undefined) item.memo = memo;
+    item.updatedAt = new Date();
+
+    await item.save();
+    res.json(item);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE: 품목 삭제
+app.delete('/api/items/:id', async (req, res) => {
+  try {
+    await Item.findByIdAndDelete(req.params.id);
+    res.json({ message: '품목이 삭제되었습니다' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // GET: Excel 다운로드
 app.get('/api/channels/:id/export', async (req, res) => {
   try {
@@ -451,19 +643,34 @@ app.get('/api/channels/:id/export', async (req, res) => {
       { header: '값', key: 'value', width: 20 }
     ];
 
-    const pplData = analyzer.calculatePPLRevenue(channel.videos, channel.pplSettings);
+    const pplData = calculatePPLSummary(channel.videos, channel.pplSettings);
+    const s = channel.pplSettings;
     const summaryData = [
       { item: '채널명', value: channel.channelName },
       { item: '구독자', value: (channel.subscribers / 1000000).toFixed(1) + 'M' },
       { item: '총 조회수', value: (channel.totalViews / 1000000000).toFixed(1) + 'B' },
       { item: '인게이지먼트율', value: pplData.engagement + '%' },
       { item: '', value: '' },
-      { item: '상품 객단가', value: channel.pplSettings.productPrice.toLocaleString() + '원' },
-      { item: '광고비', value: channel.pplSettings.adBudget.toLocaleString() + '원' },
+      { item: '품목명', value: s.itemName || '(미선택)' },
+      { item: '상품 판매가', value: (s.productPrice || 0).toLocaleString() + '원' },
+      { item: '원가', value: (s.cost || 0).toLocaleString() + '원' },
+      { item: '배송비', value: (s.shippingCost || 0).toLocaleString() + '원' },
+      { item: '사은품 비용', value: (s.giftCost || 0).toLocaleString() + '원' },
+      { item: 'PG 수수료율', value: ((s.pgFeeRate || 0) * 100).toFixed(2) + '%' },
+      { item: '', value: '' },
+      { item: '총 MG 비용', value: (s.totalMG || 0).toLocaleString() + '원' },
+      { item: '대행사(쇼크) MG 분담금', value: pplData.agencyMGShare.toLocaleString() + '원' },
+      { item: '우리측 MG 부담금', value: pplData.ourMGShare.toLocaleString() + '원' },
+      { item: 'RS율(대행사 지급)', value: ((s.rsRate || 0) * 100).toFixed(1) + '%' },
+      { item: '', value: '' },
+      { item: '예상 판매수량', value: pplData.estimatedQty.toLocaleString() + '개' },
       { item: '예상 매출', value: pplData.expectedRevenue.toLocaleString() + '원' },
-      { item: '수수료', value: pplData.commission.toLocaleString() + '원' },
+      { item: '개당 기여마진', value: pplData.unitMargin.toLocaleString() + '원' },
       { item: '순이익', value: pplData.netProfit.toLocaleString() + '원' },
-      { item: 'ROI', value: pplData.roi + '%' },
+      { item: 'ROI', value: pplData.roi !== null ? pplData.roi + '%' : '계산 불가' },
+      { item: 'ROAS', value: pplData.roas !== null ? pplData.roas + '%' : '계산 불가' },
+      { item: 'BEP 판매수량', value: pplData.bepQty !== null ? pplData.bepQty.toLocaleString() + '개' : '계산 불가' },
+      { item: 'BEP 매출', value: pplData.bepRevenue !== null ? pplData.bepRevenue.toLocaleString() + '원' : '계산 불가' },
       { item: '위험도', value: pplData.riskLevel }
     ];
 
@@ -720,7 +927,7 @@ async function setupScheduling() {
           channel.videos = videos;
           channel.lastUpdated = new Date();
 
-          const pplData = analyzer.calculatePPLRevenue(videos, channel.pplSettings);
+          const pplData = calculatePPLSummary(videos, channel.pplSettings);
           const today = new Date().toISOString().split('T')[0];
           const todayStats = channel.dailyStats.find(d => d.date === today);
 
