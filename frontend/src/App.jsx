@@ -572,6 +572,133 @@ export default function YouTubeAnalyzer() {
     setVideoPage(1);
   };
 
+  // ──────────────────────────────────────────────
+  // 채널 종합 총평 자동 생성
+  // ──────────────────────────────────────────────
+  const generateChannelAssessment = (channel) => {
+    const videos = channel?.videos || [];
+    const lf = filterVideos(videos, 'longform');
+    const mid = filterVideos(videos, 'mid');
+    const shorts = filterVideos(videos, 'shorts');
+    const eff = calculateEfficiencyScore(channel);
+    const d = eff.details;
+    const trend = calculateViewTrend(lf);
+    const ca = channel.commentAnalysis;
+    const subs = channel.subscribers || 0;
+    const totalVids = videos.length;
+    const lfRatio = totalVids > 0 ? lf.length / totalVids * 100 : 0;
+
+    const sections = [];
+
+    // ── 1. 채널 개요 ──
+    const subsText = subs >= 1000000 ? `${(subs/1000000).toFixed(1)}M` : subs >= 10000 ? `${(subs/10000).toFixed(1)}만` : `${(subs/1000).toFixed(0)}K`;
+    const ageText = d.channelAgeYears ? `${d.channelAgeYears}년` : '정보 없음';
+    const contentFocus = lfRatio >= 60 ? '롱폼 중심 채널' : shorts.length > lf.length + mid.length ? '숏폼 중심 채널' : '혼합형 채널';
+    sections.push({
+      title: '📺 채널 개요',
+      body: `구독자 ${subsText}, 채널 운영 ${ageText}의 ${contentFocus}입니다. ` +
+        `총 영상 ${totalVids.toLocaleString()}개 중 롱폼 ${lf.length}개(${lfRatio.toFixed(0)}%), 미드폼 ${mid.length}개, 숏폼 ${shorts.length}개로 구성되어 있습니다. ` +
+        (d.avgGapDays !== null
+          ? `롱폼 기준 평균 ${d.avgGapDays}일마다 업로드하며, ${d.avgGapDays <= 14 ? '꾸준한 업로드 패턴을 보입니다.' : d.avgGapDays <= 30 ? '월 1~2회 수준의 업로드 주기입니다.' : '업로드 간격이 비교적 긴 편입니다.'}`
+          : '업로드 주기 데이터가 부족합니다.')
+    });
+
+    // ── 2. 시청자 반응 & 인게이지먼트 ──
+    const engRate = parseFloat(d.engRate);
+    const engLevel = engRate >= 5 ? '매우 높은' : engRate >= 3 ? '높은' : engRate >= 1.5 ? '평균 수준의' : '낮은';
+    const viewsRatioVal = parseFloat(d.viewsRatio);
+    const loyaltyText = viewsRatioVal >= 30 ? '충성도 높은 팬층을 보유하고 있으며,' : viewsRatioVal >= 15 ? '적정 수준의 팬 충성도를 갖추고 있으며,' : '팬 충성도는 다소 낮은 편이나,';
+    const cvText = d.cvPercent !== null
+      ? (d.cvPercent <= 30 ? '영상마다 조회수 편차가 적어 안정적인 성과를 예측할 수 있습니다.' : d.cvPercent <= 60 ? '조회수 편차가 있으나 예측 가능한 범위 내에 있습니다.' : '영상별 조회수 편차가 커서 PPL 성과 예측이 불확실합니다.')
+      : '';
+    const trendText = trend?.change !== null
+      ? (trend.change > 10 ? `최근 조회수가 ${trend.change}% 상승 중으로 성장하는 채널입니다.` : trend.change < -10 ? `최근 조회수가 ${Math.abs(trend.change)}% 하락세를 보이고 있어 주의가 필요합니다.` : '조회수는 비교적 안정적으로 유지되고 있습니다.')
+      : '';
+    sections.push({
+      title: '📊 시청자 반응 분석',
+      body: `롱폼 기준 평균 인게이지먼트율 ${d.engRate}%로 ${engLevel} 반응도를 보입니다. ` +
+        `${loyaltyText} 구독자 대비 평균 조회수 비율은 ${d.viewsRatio}%입니다. ` +
+        `${cvText} ${trendText}`
+    });
+
+    // ── 3. PPL 친화도 ──
+    const adRatioVal = parseFloat(d.adRatio);
+    const adText = adRatioVal <= 10
+      ? `최근 광고 비율이 ${d.adRatio}%로 매우 낮아, 시청자들의 광고 피로도가 낮고 새로운 PPL에 대한 수용도가 높을 것으로 판단됩니다.`
+      : adRatioVal <= 25
+      ? `최근 광고 비율이 ${d.adRatio}%로 적정 수준입니다. 광고 피로도는 관리 가능한 범위입니다.`
+      : `최근 광고 비율이 ${d.adRatio}%로 다소 높아, 시청자들이 광고 콘텐츠에 이미 익숙하거나 피로를 느낄 수 있습니다.`;
+    const lfPplText = lf.length >= 20
+      ? `롱폼 영상이 ${lf.length}개로 충분하여 PPL 노출 기회가 다양합니다.`
+      : lf.length >= 5
+      ? `롱폼 영상 ${lf.length}개에서 PPL 집행이 가능합니다.`
+      : `롱폼 영상이 ${lf.length}개로 적어 PPL 집행 가능한 영상이 제한적입니다.`;
+    sections.push({
+      title: '🎯 PPL 친화도',
+      body: `${adText} ${lfPplText}`
+    });
+
+    // ── 4. 제품 핏 분석 (헬스케어/마사지기) ──
+    const channelName = channel.channelName || '';
+    const keywords = (channel.channelKeywords || []).join(' ').toLowerCase();
+    const healthKeywords = ['건강', '헬스', '운동', '마사지', '피로', '스트레칭', '몸관리', '홈케어', '다이어트', '웰니스', '라이프스타일', '일상'];
+    const familyKeywords = ['가족', '육아', '주부', '살림', '일상', '맘', '패밀리', 'family', '엄마'];
+    const matchedHealth = healthKeywords.filter(k => channelName.includes(k) || keywords.includes(k));
+    const matchedFamily = familyKeywords.filter(k => channelName.includes(k) || keywords.includes(k));
+    let fitText = '';
+    let fitLevel = '';
+    if (matchedHealth.length > 0) {
+      fitLevel = '높음';
+      fitText = `채널 키워드(${matchedHealth.slice(0,3).join(', ')})가 헬스케어·마사지 제품과 직접 연관되어 제품 핏이 우수합니다. 시청자들이 이미 건강 관련 콘텐츠에 관심이 높아 PPL 전환율 기대치가 높습니다.`;
+    } else if (matchedFamily.length > 0) {
+      fitLevel = '중간';
+      fitText = `가족·일상 채널로, 마사지기·헬스케어 제품의 '집에서 쉽게 쓰는 건강 아이템' 포지셔닝으로 접근하면 시청자 공감을 이끌어낼 수 있습니다.`;
+    } else if (subs >= 100000 && engRate >= 3) {
+      fitLevel = '중간';
+      fitText = `채널 카테고리가 헬스케어와 직접 연관되지는 않지만, 높은 인게이지먼트를 보유한 중대형 채널로서 브랜드 인지도 확대 목적의 PPL에는 적합할 수 있습니다. 타깃 시청자층 분석 후 판단을 권장합니다.`;
+    } else {
+      fitLevel = '낮음';
+      fitText = `채널의 콘텐츠 방향성이 헬스케어·마사지 제품과의 연관성이 낮습니다. PPL 집행 시 시청자 거부감이 발생할 수 있어 신중한 검토가 필요합니다.`;
+    }
+    sections.push({
+      title: `🛍️ 제품 핏 분석 (헬스케어/마사지기) — ${fitLevel}`,
+      body: fitText
+    });
+
+    // ── 5. 댓글 분석 요약 (있을 때만) ──
+    if (ca?.qualityScore != null) {
+      const purchaseRate = (ca.purchaseIntentRatio * 100).toFixed(1);
+      const negRate = (ca.negativeRatio * 100).toFixed(1);
+      const commentText =
+        `댓글 품질 점수 ${ca.qualityScore}점, 구매의도 댓글 비율 ${purchaseRate}%로 ` +
+        (ca.purchaseIntentRatio >= 0.1 ? '시청자들의 구매 관심도가 높습니다. ' : '시청자 구매 의향은 보통 수준입니다. ') +
+        `평균 댓글 길이 ${ca.avgCommentLength}자로 ${ca.avgCommentLength >= 20 ? '진성 팬의 비중이 높고,' : '단순 반응 댓글이 많으며,'} ` +
+        `광고 부정 반응은 ${negRate}%로 ${ca.negativeRatio <= 0.05 ? 'PPL 친화적인 댓글 분위기를 형성하고 있습니다.' : '광고에 대한 거부 반응이 일부 존재합니다.'}`;
+      sections.push({ title: '💬 댓글 품질 요약', body: commentText });
+    }
+
+    // ── 6. 종합 의견 ──
+    const score = eff.total;
+    let recommendation = '';
+    let recColor = '';
+    if (score >= 75) {
+      recommendation = `효율 점수 ${score}점으로 PPL 집행을 적극 권장합니다. 높은 인게이지먼트와 안정적인 조회수를 바탕으로 예측 가능한 PPL 성과가 기대됩니다. 우선 협의 채널로 검토하시기 바랍니다.`;
+      recColor = 'green';
+    } else if (score >= 55) {
+      recommendation = `효율 점수 ${score}점으로 조건부 집행을 검토할 수 있습니다. 일부 지표가 아쉽지만 전체적으로 균형 잡힌 채널입니다. MG 조건을 보수적으로 설정하고 소규모 테스트 캠페인으로 시작하는 것을 권장합니다.`;
+      recColor = 'yellow';
+    } else if (score >= 40) {
+      recommendation = `효율 점수 ${score}점으로 신중한 접근이 필요합니다. 특정 지표에서 리스크 요인이 확인됩니다. 낮은 MG로 리스크를 최소화하거나, 지표 개선 후 재검토를 권장합니다.`;
+      recColor = 'orange';
+    } else {
+      recommendation = `효율 점수 ${score}점으로 현 시점에서 PPL 집행을 권장하지 않습니다. 인게이지먼트, 조회수 일관성 등 핵심 지표가 기준에 미달합니다. 해당 채널은 보류 처리하고 다른 채널을 우선 검토하시기 바랍니다.`;
+      recColor = 'red';
+    }
+    sections.push({ title: '📋 종합 의견', body: recommendation, highlight: true, color: recColor });
+
+    return sections;
+  };
+
   // 영상 테이블 페이지네이션 + 검색 헬퍼
   const getPaginatedVideos = (videos) => {
     const filtered = videoSearch.trim()
@@ -673,6 +800,16 @@ export default function YouTubeAnalyzer() {
       lines.push(`| 구매의도 댓글 비율 | ${(ca.purchaseIntentRatio*100).toFixed(1)}% |`);
       lines.push(`| 평균 댓글 길이 | ${ca.avgCommentLength}자 |`);
       lines.push(`| 광고 부정 반응 | ${(ca.negativeRatio*100).toFixed(1)}% |`);
+    }
+
+    // 채널 종합 총평
+    const assessment = generateChannelAssessment(channel);
+    if (assessment?.length > 0) {
+      lines.push(``, `## 💡 채널 종합 총평`);
+      assessment.forEach(sec => {
+        lines.push(``, `### ${sec.title}`);
+        lines.push(sec.body);
+      });
     }
 
     if (channel.campaignLogs?.length > 0) {
@@ -1200,6 +1337,35 @@ export default function YouTubeAnalyzer() {
                         <p className="text-slate-500 text-sm text-center py-4">댓글 분석을 실행하면 구매의도, 댓글 품질, 복합 PPL 점수를 확인할 수 있습니다</p>
                       )}
                     </div>
+
+                    {/* ── 채널 종합 총평 ── */}
+                    {(() => {
+                      const sections = generateChannelAssessment(selectedChannel);
+                      const colorMap = {
+                        green: { bg: 'bg-green-900/40 border-green-600', icon: '✅', text: 'text-green-300' },
+                        yellow: { bg: 'bg-yellow-900/40 border-yellow-600', icon: '⚠️', text: 'text-yellow-200' },
+                        orange: { bg: 'bg-orange-900/40 border-orange-600', icon: '🔶', text: 'text-orange-200' },
+                        red: { bg: 'bg-red-900/40 border-red-600', icon: '❌', text: 'text-red-200' },
+                      };
+                      return (
+                        <div className="bg-slate-700 border border-slate-600 rounded-lg p-5 mt-4">
+                          <h3 className="text-lg font-bold text-white mb-1">💡 채널 종합 총평</h3>
+                          <p className="text-xs text-slate-400 mb-4">채널 특성 · 데이터 분석 · 제품 핏 · 종합 의견을 자동으로 정리합니다</p>
+                          <div className="space-y-3">
+                            {sections.map((sec, i) => {
+                              const isHighlight = sec.highlight;
+                              const c = colorMap[sec.color] || {};
+                              return (
+                                <div key={i} className={`rounded-lg p-4 border ${isHighlight ? c.bg : 'bg-slate-800 border-slate-600'}`}>
+                                  <p className={`text-sm font-bold mb-1.5 ${isHighlight ? c.text : 'text-slate-300'}`}>{sec.title}</p>
+                                  <p className={`text-sm leading-relaxed ${isHighlight ? c.text : 'text-slate-300'}`}>{sec.body}</p>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 
