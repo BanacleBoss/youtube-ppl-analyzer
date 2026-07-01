@@ -34,6 +34,7 @@ const channelSchema = new mongoose.Schema({
   pplSettings: {
     productPrice: { type: Number, default: 50000 },
     adBudget: { type: Number, default: 1000000 },
+    expectedClicks: { type: Number, default: 0 },       // 예상 클릭수 (영상→구매페이지 유입 예상치)
     expectedConversionRate: { type: Number, default: 0.03 },
     commissionRate: { type: Number, default: 0.1 },
     targetROI: { type: Number, default: 3 },
@@ -158,9 +159,12 @@ function calculatePPLSummary(videos, settings) {
   const longform = (videos || []).filter(v => (v.duration || 0) > 600);
   const recent = longform.slice(0, 10);
 
+  const totalMG = Number(settings.totalMG) || 0;
+
   if (recent.length === 0) {
     return {
-      avgViews: 0, engagement: 0, estimatedQty: 0, expectedRevenue: 0,
+      avgViews: 0, engagement: 0, expectedClicks: 0, clickRate: null, cpv: null,
+      estimatedQty: 0, expectedRevenue: 0,
       unitMargin: 0, ourMGShare: 0, agencyMGShare: 0, netProfit: 0,
       roi: null, roas: null, riskLevel: '평가 불가', bepQty: null, bepRevenue: null
     };
@@ -168,8 +172,11 @@ function calculatePPLSummary(videos, settings) {
 
   const engagement = recent.reduce((sum, v) => sum + (parseFloat(v.engagement) || 0), 0) / recent.length / 100;
   const avgViews = recent.reduce((sum, v) => sum + (v.views || 0), 0) / recent.length;
-  const estimatedQty = avgViews * engagement * (settings.expectedConversionRate || 0);
+  const expectedClicks = Number(settings.expectedClicks) || 0;
+  const estimatedQty = expectedClicks * (settings.expectedConversionRate || 0);
   const expectedRevenue = estimatedQty * (settings.productPrice || 0);
+  const clickRate = avgViews > 0 ? (expectedClicks / avgViews * 100) : null;
+  const cpv = avgViews > 0 ? parseFloat((totalMG / avgViews).toFixed(2)) : null;
 
   const profit = calculatePPLProfit(settings);
   const netProfit = estimatedQty * profit.unitMargin - profit.ourMGShare;
@@ -187,6 +194,9 @@ function calculatePPLSummary(videos, settings) {
   return {
     avgViews: Math.round(avgViews),
     engagement: parseFloat((engagement * 100).toFixed(2)),
+    expectedClicks: Math.round(expectedClicks),
+    clickRate: clickRate !== null ? parseFloat(clickRate.toFixed(2)) : null,
+    cpv,
     estimatedQty: Math.round(estimatedQty),
     expectedRevenue: Math.round(expectedRevenue),
     unitMargin: profit.unitMargin,
@@ -402,6 +412,7 @@ app.post('/api/channels', async (req, res) => {
     const pplData = calculatePPLSummary(videos, {
       productPrice: 50000,
       adBudget: 1000000,
+      expectedClicks: 0,
       expectedConversionRate: 0.03,
       commissionRate: 0.1,
       cost: 0, shippingCost: 0, giftCost: 0, pgFeeRate: 0.0385,
@@ -420,6 +431,7 @@ app.post('/api/channels', async (req, res) => {
       pplSettings: {
         productPrice: 50000,
         adBudget: 1000000,
+        expectedClicks: 0,
         expectedConversionRate: 0.03,
         commissionRate: 0.1,
         targetROI: 3
@@ -542,6 +554,7 @@ app.post('/api/channels/:id/settings', async (req, res) => {
     channel.pplSettings = {
       productPrice: req.body.productPrice || 50000,
       adBudget: req.body.adBudget || 1000000,
+      expectedClicks: req.body.expectedClicks || 0,
       expectedConversionRate: req.body.expectedConversionRate || 0.03,
       commissionRate: req.body.commissionRate || 0.1,
       targetROI: req.body.targetROI || 3,
@@ -691,6 +704,12 @@ app.get('/api/channels/:id/export', async (req, res) => {
       { item: '대행사(쇼크) MG 분담금', value: pplData.agencyMGShare.toLocaleString() + '원' },
       { item: '우리측 MG 부담금', value: pplData.ourMGShare.toLocaleString() + '원' },
       { item: 'RS율(대행사 지급)', value: ((s.rsRate || 0) * 100).toFixed(1) + '%' },
+      { item: '', value: '' },
+      { item: '평균 조회수(최근 롱폼 10개)', value: pplData.avgViews.toLocaleString() + '회' },
+      { item: 'CPV(조회수당 비용)', value: pplData.cpv !== null ? pplData.cpv.toLocaleString() + '원' : '계산 불가' },
+      { item: '예상 클릭수', value: (pplData.expectedClicks || 0).toLocaleString() + '회' },
+      { item: '예상 클릭률(조회수 대비)', value: pplData.clickRate !== null ? pplData.clickRate + '%' : '계산 불가' },
+      { item: '예상 전환율', value: ((s.expectedConversionRate || 0) * 100).toFixed(2) + '%' },
       { item: '', value: '' },
       { item: '예상 판매수량', value: pplData.estimatedQty.toLocaleString() + '개' },
       { item: '예상 매출', value: pplData.expectedRevenue.toLocaleString() + '원' },

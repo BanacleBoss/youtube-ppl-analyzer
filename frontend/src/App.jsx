@@ -32,7 +32,7 @@ export default function YouTubeAnalyzer() {
   const [refreshing, setRefreshing] = useState({});
   const [activeTab, setActiveTab] = useState('summary');
   const [settings, setSettings] = useState({
-    productPrice: 50000, expectedConversionRate: 0.03,
+    productPrice: 50000, expectedClicks: 0, expectedConversionRate: 0.03,
     itemId: '', itemName: '', cost: 0, shippingCost: 0, giftCost: 0, pgFeeRate: 0.0385,
     totalMG: 0, agencyMGShareRate: 0.3, rsRate: 0.2
   });
@@ -57,6 +57,7 @@ export default function YouTubeAnalyzer() {
     if (ch?.pplSettings) {
       setSettings({
         productPrice: ch.pplSettings.productPrice ?? 50000,
+        expectedClicks: ch.pplSettings.expectedClicks ?? 0,
         expectedConversionRate: ch.pplSettings.expectedConversionRate ?? 0.03,
         itemId: ch.pplSettings.itemId ?? '',
         itemName: ch.pplSettings.itemName ?? '',
@@ -326,19 +327,22 @@ export default function YouTubeAnalyzer() {
   };
 
   // PPL 매출/손익 분석 — MG/RS/원가 구조를 반영한 통합 계산
-  // 예상 판매수량(avgViews × 인게이지먼트 × 전환율)에 개당 기여마진을 곱해 순이익을 구하고,
+  // 예상 판매수량(예상 클릭수 × 전환율)에 개당 기여마진을 곱해 순이익을 구하고,
   // 우리측 MG 부담금(고정비)을 차감한다. (손익/BEP 탭의 calculateBEP와 동일한 원가 기준 사용)
   const calculatePPLRevenue = (videos) => {
     const longformVideos = filterVideos(videos, 'longform');
     if (!longformVideos || longformVideos.length === 0) {
-      return { avgViews: 0, engagement: 0, estimatedQty: 0, expectedRevenue: 0, unitMargin: 0, ourMGShare: 0, netProfit: 0, roi: null, roas: null, riskLevel: '평가 불가' };
+      return { avgViews: 0, engagement: 0, expectedClicks: 0, clickRate: null, cpv: null, estimatedQty: 0, expectedRevenue: 0, unitMargin: 0, ourMGShare: 0, netProfit: 0, roi: null, roas: null, riskLevel: '평가 불가' };
     }
     const recentVideos = longformVideos.slice(0, 10);
     const engagement = recentVideos.reduce((sum, v) => sum + (parseFloat(v.engagement) || 0), 0) / recentVideos.length / 100;
     const avgViews = recentVideos.reduce((sum, v) => sum + (v.views || 0), 0) / recentVideos.length;
+    const expectedClicks = Number(settings.expectedClicks) || 0;
 
-    const estimatedQty = avgViews * engagement * settings.expectedConversionRate;
+    const estimatedQty = expectedClicks * settings.expectedConversionRate;
     const expectedRevenue = estimatedQty * settings.productPrice;
+    const clickRate = avgViews > 0 ? (expectedClicks / avgViews * 100) : null;
+    const cpv = avgViews > 0 ? Number((settings.totalMG / avgViews).toFixed(2)) : null;
 
     const bep = calculateBEP(settings);
     const netProfit = estimatedQty * bep.unitMargin - bep.ourMGShare;
@@ -356,6 +360,9 @@ export default function YouTubeAnalyzer() {
     return {
       avgViews: Math.round(avgViews),
       engagement: (engagement * 100).toFixed(2),
+      expectedClicks: Math.round(expectedClicks),
+      clickRate: clickRate !== null ? parseFloat(clickRate.toFixed(2)) : null,
+      cpv,
       estimatedQty: Math.round(estimatedQty),
       expectedRevenue: Math.round(expectedRevenue),
       unitMargin: bep.unitMargin,
@@ -430,6 +437,8 @@ export default function YouTubeAnalyzer() {
 
   const selectedChannel = channels.find(ch => ch._id === selectedChannelId);
   const pplData = selectedChannel ? calculatePPLRevenue(selectedChannel.videos) : {};
+  // 최근 롱폼 평균조회수 × 인게이지먼트를 "예상 클릭수" 입력의 참고값으로 제공 (실제 값은 사용자가 직접 입력/보정)
+  const suggestedClicks = Math.round((pplData.avgViews || 0) * (parseFloat(pplData.engagement || 0) / 100));
   const longformVideos = selectedChannel ? filterVideos(selectedChannel.videos, 'longform') : [];
   const midVideos = selectedChannel ? filterVideos(selectedChannel.videos, 'mid') : [];
   const shortsVideos = selectedChannel ? filterVideos(selectedChannel.videos, 'shorts') : [];
@@ -683,6 +692,8 @@ export default function YouTubeAnalyzer() {
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">구독자</p><p className="text-2xl font-bold text-white mt-1">{(selectedChannel.subscribers / 1000000).toFixed(1)}M</p></div>
                       <div className="bg-slate-700 rounded p-4"><InfoTooltip content="= (좋아요 + 댓글) / 조회수 × 100%"><p className="text-slate-400 text-sm">인게이지먼트</p><p className="text-2xl font-bold text-white mt-1">{pplData.engagement}%</p></InfoTooltip></div>
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">평균 조회수</p><p className="text-2xl font-bold text-white mt-1">{(pplData.avgViews/1000).toFixed(0)}K</p></div>
+                      <div className="bg-slate-700 rounded p-4"><InfoTooltip content="= 총 MG 비용 ÷ 평균 조회수. 조회수 1회를 만드는 데 든 비용"><p className="text-slate-400 text-sm">CPV(조회수당 비용)</p></InfoTooltip><p className="text-2xl font-bold text-white mt-1">{pplData.cpv !== null && pplData.cpv !== undefined ? `${pplData.cpv.toLocaleString()}원` : '계산 불가'}</p></div>
+                      <div className="bg-slate-700 rounded p-4"><InfoTooltip content="= 예상 클릭수 ÷ 평균 조회수 × 100%. 설정 탭에서 예상 클릭수를 입력하면 계산됩니다"><p className="text-slate-400 text-sm">예상 클릭률</p></InfoTooltip><p className="text-2xl font-bold text-white mt-1">{pplData.clickRate !== null && pplData.clickRate !== undefined ? `${pplData.clickRate}%` : '계산 불가'}</p></div>
                     </div>
                     <div className="bg-gradient-to-br from-blue-900 to-blue-800 border border-blue-600 rounded-lg p-6">
                       <h3 className="text-xl font-bold text-white mb-1">💰 PPL 매출 분석</h3>
@@ -690,7 +701,8 @@ export default function YouTubeAnalyzer() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="bg-slate-800/80 rounded-lg p-4"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">상품 객단가</p><p className="text-xl font-bold text-white">{settings.productPrice.toLocaleString()}원</p></div>
                         <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content="= 총 MG − 대행사(쇼크) MG 분담금. 판매 마진으로 회수해야 하는 고정비"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">우리측 MG 부담금</p></InfoTooltip><p className="text-xl font-bold text-white">{pplData.ourMGShare?.toLocaleString()}원</p></div>
-                        <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content="= 평균조회수 × 인게이지먼트 × 전환율"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">📦 예상 판매수량</p></InfoTooltip><p className="text-xl font-bold text-white">{pplData.estimatedQty?.toLocaleString()}개</p></div>
+                        <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content="설정 탭에서 직접 입력 (참고: 평균조회수 × 인게이지먼트)"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">🖱️ 예상 클릭수</p></InfoTooltip><p className="text-xl font-bold text-white">{pplData.expectedClicks?.toLocaleString()}회</p></div>
+                        <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content="= 예상 클릭수 × 전환율"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">📦 예상 판매수량</p></InfoTooltip><p className="text-xl font-bold text-white">{pplData.estimatedQty?.toLocaleString()}개</p></div>
                         <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content="= 예상 판매수량 × 상품 객단가"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">📊 예상 매출</p></InfoTooltip><p className="text-xl font-bold text-white">{pplData.expectedRevenue?.toLocaleString()}원</p></div>
                         <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content="= 판매가 − 원가 − 배송비 − 사은품 − PG수수료 − RS비용"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">개당 기여마진</p></InfoTooltip><p className={`text-xl font-bold ${pplData.unitMargin >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pplData.unitMargin?.toLocaleString()}원</p></div>
                         <div className="bg-slate-800/80 rounded-lg p-4 ring-1 ring-slate-600"><InfoTooltip content="= 예상 판매수량 × 개당 기여마진 − 우리측 MG 부담금"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">💵 순이익</p></InfoTooltip><p className={`text-xl font-bold ${pplData.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pplData.netProfit?.toLocaleString()}원</p></div>
@@ -978,7 +990,15 @@ export default function YouTubeAnalyzer() {
                         {items.length === 0 && <p className="text-xs text-slate-500 mt-1">등록된 품목이 없습니다. 상단 "📦 품목관리"에서 먼저 등록하세요.</p>}
                       </div>
                       <div><label className="block text-slate-300 text-sm mb-2">상품 객단가 / 판매가 (원)</label><input type="number" value={settings.productPrice} onChange={(e) => setSettings({...settings, productPrice: parseInt(e.target.value)})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
-                      <div><label className="block text-slate-300 text-sm mb-2">예상 전환율 (%)</label><input type="number" step="0.01" value={settings.expectedConversionRate * 100} onChange={(e) => setSettings({...settings, expectedConversionRate: parseFloat(e.target.value) / 100})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
+                      <div>
+                        <label className="block text-slate-300 text-sm mb-2">예상 클릭수 (회)</label>
+                        <input type="number" value={settings.expectedClicks} onChange={(e) => setSettings({...settings, expectedClicks: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" />
+                        <div className="flex items-center justify-between gap-2 mt-1">
+                          <p className="text-xs text-slate-500">참고: 최근 롱폼 평균조회수 × 인게이지먼트 = {suggestedClicks.toLocaleString()}회</p>
+                          <button type="button" onClick={() => setSettings({...settings, expectedClicks: suggestedClicks})} className="text-xs text-blue-400 hover:text-blue-300 shrink-0 whitespace-nowrap">이 값 적용</button>
+                        </div>
+                      </div>
+                      <div><label className="block text-slate-300 text-sm mb-2">예상 전환율 (%, 클릭 대비 구매)</label><input type="number" step="0.01" value={settings.expectedConversionRate * 100} onChange={(e) => setSettings({...settings, expectedConversionRate: parseFloat(e.target.value) / 100})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
 
                       <div className="border-t border-slate-700 pt-4 mt-2">
                         <h4 className="text-slate-200 font-semibold mb-3">💰 손익/BEP 계산용 원가 정보</h4>
@@ -1034,6 +1054,10 @@ export default function YouTubeAnalyzer() {
                         <div className="bg-slate-800/80 rounded-lg p-4">
                           <p className="text-slate-400 text-xs uppercase tracking-wide mb-1">총 MG 비용</p>
                           <p className="text-xl font-bold text-white">{(settings.totalMG || 0).toLocaleString()}원</p>
+                        </div>
+                        <div className="bg-slate-800/80 rounded-lg p-4">
+                          <InfoTooltip content="= 총 MG 비용 ÷ 평균 조회수(최근 롱폼 10개 기준)"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">CPV(조회수당 비용)</p></InfoTooltip>
+                          <p className="text-xl font-bold text-white">{pplData.cpv !== null && pplData.cpv !== undefined ? `${pplData.cpv.toLocaleString()}원` : '계산 불가'}</p>
                         </div>
                         <div className="bg-slate-800/80 rounded-lg p-4">
                           <InfoTooltip content="= 총 MG × 대행사 MG 분담율"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">대행사(쇼크) MG 분담금</p></InfoTooltip>
