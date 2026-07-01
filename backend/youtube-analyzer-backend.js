@@ -33,6 +33,7 @@ if (!process.env.RENDER) {
 }
 
 const app = express();
+app.set('trust proxy', 1); // Render 리버스 프록시 신뢰 (express-rate-limit X-Forwarded-For 오류 방지)
 
 // CORS_ORIGIN 환경변수(쉼표로 여러 개 구분 가능)가 설정되어 있으면 해당 origin만 허용하고,
 // 설정되어 있지 않으면 기존과 동일하게 모든 origin을 허용한다(하위 호환, 미설정 시 동작 변화 없음).
