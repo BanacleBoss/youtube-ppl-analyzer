@@ -667,7 +667,7 @@ export default function YouTubeAnalyzer() {
             {selectedChannel && (
               <div className="lg:col-span-2 space-y-6">
                 <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
-                  {['summary', 'longform', 'mid', 'shorts', 'settings', 'bep', 'trends', 'export'].map(tab => (
+                  {['summary', 'bep', 'trends', 'settings', 'longform', 'mid', 'shorts', 'export'].map(tab => (
                     <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3.5 py-2 rounded-lg font-medium text-sm transition whitespace-nowrap flex-shrink-0 ${activeTab === tab ? 'bg-blue-600 text-white shadow shadow-blue-900/40' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'}`}>
                       {tab === 'summary' && '📊 요약'} {tab === 'longform' && '🎬 롱폼(10분↑)'} {tab === 'mid' && '▶️ 미드폼(1~10분)'} {tab === 'shorts' && '📱 숏폼(60초↓)'} {tab === 'settings' && '⚙️ 설정'} {tab === 'bep' && '💰 손익/BEP'} {tab === 'trends' && '📈 트렌드'} {tab === 'export' && '📥 내보내기'}
                     </button>
