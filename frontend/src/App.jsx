@@ -345,10 +345,13 @@ export default function YouTubeAnalyzer() {
     const roi = bep.ourMGShare > 0 ? (netProfit / bep.ourMGShare * 100) : null;
     const roas = bep.ourMGShare > 0 ? (expectedRevenue / bep.ourMGShare * 100) : null;
 
-    let riskLevel = '높음';
-    if (roi === null) riskLevel = '평가 불가';
-    else if (roi > 200 && engagement > 0.05) riskLevel = '낮음';
-    else if (roi > 100 && engagement > 0.02) riskLevel = '중간';
+    // BEP 달성 여부(ROI 0% 기준)와 항상 일치하도록: ROI<0(BEP 미달)일 때만 '높음'
+    let riskLevel = '평가 불가';
+    if (roi !== null) {
+      if (roi < 0) riskLevel = '높음';
+      else if (roi < 100) riskLevel = '중간';
+      else riskLevel = '낮음';
+    }
 
     return {
       avgViews: Math.round(avgViews),
@@ -683,7 +686,9 @@ export default function YouTubeAnalyzer() {
                         <div className="bg-slate-800 rounded p-4"><InfoTooltip content="= 순이익 / 우리측 MG 부담금 × 100%"><p className="text-slate-300 text-sm">🎯 ROI</p><p className="text-xl font-bold text-cyan-400">{pplData.roi !== null ? `${pplData.roi}%` : '계산 불가'}</p></InfoTooltip></div>
                       </div>
                       <div className={`p-4 rounded text-center font-bold text-lg mt-4 ${pplData.riskLevel === '낮음' ? 'bg-green-600 text-green-100' : pplData.riskLevel === '중간' ? 'bg-yellow-600 text-yellow-100' : 'bg-red-600 text-red-100'}`}>
-                        위험도: {pplData.riskLevel} {pplData.riskLevel === '낮음' ? '✅ 강추' : pplData.riskLevel === '중간' ? '⚠️ 검토' : pplData.riskLevel === '평가 불가' ? '' : '❌ 신중'}
+                        <InfoTooltip content="ROI(=순이익/우리측MG부담금) 기준 — ROI 100%↑ → 낮음(강추) / ROI 0~100% → 중간(BEP 달성, 검토) / ROI 0% 미만 → 높음(BEP 미달, 신중) / 우리측 MG 부담금이 0원이면 '평가 불가'">
+                          <span>위험도: {pplData.riskLevel} {pplData.riskLevel === '낮음' ? '✅ 강추' : pplData.riskLevel === '중간' ? '⚠️ 검토' : pplData.riskLevel === '평가 불가' ? '' : '❌ 신중'}</span>
+                        </InfoTooltip>
                       </div>
                       {pplData.bepQty !== null && pplData.bepQty !== undefined && (
                         <p className="text-blue-200 text-xs mt-3 text-center">BEP 판매수량 {pplData.bepQty?.toLocaleString()}개 대비 예상 판매수량 {pplData.estimatedQty?.toLocaleString()}개 {pplData.estimatedQty >= pplData.bepQty ? '— BEP 달성 예상 ✅' : '— BEP 미달 예상 ⚠️'}</p>

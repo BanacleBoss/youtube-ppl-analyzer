@@ -168,10 +168,13 @@ function calculatePPLSummary(videos, settings) {
   const roi = profit.ourMGShare > 0 ? (netProfit / profit.ourMGShare * 100) : null;
   const roas = profit.ourMGShare > 0 ? (expectedRevenue / profit.ourMGShare * 100) : null;
 
-  let riskLevel = '높음';
-  if (roi === null) riskLevel = '평가 불가';
-  else if (roi > 200 && engagement > 0.05) riskLevel = '낮음';
-  else if (roi > 100 && engagement > 0.02) riskLevel = '중간';
+  // BEP 달성 여부(ROI 0% 기준)와 항상 일치하도록: ROI<0(BEP 미달)일 때만 '높음'
+  let riskLevel = '평가 불가';
+  if (roi !== null) {
+    if (roi < 0) riskLevel = '높음';
+    else if (roi < 100) riskLevel = '중간';
+    else riskLevel = '낮음';
+  }
 
   return {
     avgViews: Math.round(avgViews),
