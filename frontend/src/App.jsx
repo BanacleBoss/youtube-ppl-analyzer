@@ -2031,7 +2031,15 @@ export default function YouTubeAnalyzer() {
 
         <div className="mt-12 border-t border-slate-800 pt-6 text-center space-y-1">
           <p className="text-slate-500 text-xs">💡 팁: 정기적으로 갱신하여 최신 통계를 확인하세요</p>
-          <p className="text-slate-600 text-xs">YouTube Channel Analyzer · Built by <span className="text-slate-500 font-medium">Jay Jeong (정승환)</span></p>
+          <p className="text-slate-600 text-xs">
+            YouTube Channel Analyzer · Built by <span className="text-slate-500 font-medium">Jay Jeong (정승환)</span>
+            {process.env.REACT_APP_VERSION && (
+              <span className="text-slate-700 ml-2">
+                v{process.env.REACT_APP_VERSION}
+                {process.env.REACT_APP_BUILD_TIME && <> · {process.env.REACT_APP_BUILD_TIME} 빌드</>}
+              </span>
+            )}
+          </p>
         </div>
       </div>
 
