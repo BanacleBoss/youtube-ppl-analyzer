@@ -90,6 +90,7 @@ export default function YouTubeAnalyzer() {
         agencyMGShareRate: ch.pplSettings.agencyMGShareRate ?? 0.3,
         rsRate: ch.pplSettings.rsRate ?? 0.2,
       });
+    }
     // 채널 메타 폼 초기화
     if (ch) {
       setMetaForm({
