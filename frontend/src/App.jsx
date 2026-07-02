@@ -41,6 +41,7 @@ export default function YouTubeAnalyzer() {
   const [compareMode, setCompareMode] = useState(false);
   const [compareChannelIds, setCompareChannelIds] = useState([]);
   const [showDiscover, setShowDiscover] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
   const [channelSearch, setChannelSearch] = useState('');
   const [channelSortBy, setChannelSortBy] = useState('name'); // name | score | subscribers
   const [discoverKeyword, setDiscoverKeyword] = useState('안마기 리뷰');
@@ -849,7 +850,7 @@ export default function YouTubeAnalyzer() {
       });
     }
 
-    lines.push(``, `---`, `*YouTube PPL 분석기 PRO | Built by Jay Jeong (정승환)*`);
+    lines.push(``, `---`, `*YouTube Channel Analyzer | Built by Jay Jeong (정승환)*`);
     return lines.join('\n');
   };
 
@@ -875,10 +876,13 @@ export default function YouTubeAnalyzer() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
             <div>
-              <h1 className="text-xl sm:text-3xl font-bold text-white tracking-tight">📊 YouTube PPL 분석기 <span className="text-blue-400">PRO</span></h1>
+              <h1 className="text-xl sm:text-3xl font-bold text-white tracking-tight">📊 YouTube Channel <span className="text-blue-400">Analyzer</span></h1>
               <p className="text-slate-500 mt-0.5 text-xs sm:text-sm">{channels.length}개 채널 · Built by <span className="text-slate-400 font-medium">Jay Jeong</span></p>
             </div>
             <div className="flex flex-wrap gap-2 sm:gap-3">
+              <button onClick={() => setShowGuide(true)} className="flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border bg-transparent border-slate-600 text-slate-300 hover:border-blue-400 hover:text-blue-300">
+                ❓ 사용 가이드
+              </button>
               <button onClick={() => setShowItemManager(!showItemManager)} className={`flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border ${showItemManager ? 'bg-emerald-600/20 border-emerald-500 text-emerald-300' : 'bg-transparent border-slate-600 text-slate-300 hover:border-slate-500 hover:text-white'}`}>
                 <Package size={16} /> 품목관리
               </button>
@@ -2026,9 +2030,187 @@ export default function YouTubeAnalyzer() {
 
         <div className="mt-12 border-t border-slate-800 pt-6 text-center space-y-1">
           <p className="text-slate-500 text-xs">💡 팁: 정기적으로 갱신하여 최신 통계를 확인하세요</p>
-          <p className="text-slate-600 text-xs">YouTube PPL 분석기 PRO · Built by <span className="text-slate-500 font-medium">Jay Jeong (정승환)</span></p>
+          <p className="text-slate-600 text-xs">YouTube Channel Analyzer · Built by <span className="text-slate-500 font-medium">Jay Jeong (정승환)</span></p>
         </div>
       </div>
+
+      {/* ── 사용 가이드 모달 ── */}
+      {showGuide && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-start justify-center overflow-y-auto py-8 px-4" onClick={e => { if (e.target === e.currentTarget) setShowGuide(false); }}>
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl shadow-2xl">
+            {/* 헤더 */}
+            <div className="flex items-center justify-between px-6 py-5 border-b border-slate-700">
+              <div>
+                <h2 className="text-xl font-bold text-white">📖 사용 가이드</h2>
+                <p className="text-slate-400 text-sm mt-0.5">YouTube Channel Analyzer 시작하기</p>
+              </div>
+              <button onClick={() => setShowGuide(false)} className="text-slate-400 hover:text-white transition text-2xl leading-none">×</button>
+            </div>
+
+            {/* 본문 */}
+            <div className="px-6 py-6 space-y-8 text-sm">
+
+              {/* 전체 흐름 */}
+              <section>
+                <h3 className="text-blue-400 font-bold text-base mb-3">🗺️ 전체 사용 흐름</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 text-center">
+                  {[
+                    { step:'①', title:'채널 추가', desc:'YouTube 채널 URL 입력' },
+                    { step:'②', title:'데이터 수집', desc:'영상/구독자 자동 분석' },
+                    { step:'③', title:'효율 점수 확인', desc:'PPL 적합도 100점 평가' },
+                    { step:'④', title:'PPL 설정', desc:'MG·원가·RS 입력' },
+                    { step:'⑤', title:'수익 분석', desc:'예상 매출·ROI 계산' },
+                  ].map(s => (
+                    <div key={s.step} className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+                      <p className="text-blue-400 font-bold text-lg">{s.step}</p>
+                      <p className="text-white font-semibold mt-1">{s.title}</p>
+                      <p className="text-slate-400 text-xs mt-1">{s.desc}</p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {/* 채널 추가 */}
+              <section>
+                <h3 className="text-green-400 font-bold text-base mb-3">➕ 채널 추가하기</h3>
+                <div className="bg-slate-800 rounded-lg p-4 space-y-2 border border-slate-700">
+                  <p className="text-slate-300">1. 우측 상단 <span className="bg-blue-600 text-white px-2 py-0.5 rounded text-xs font-semibold">+ 채널 추가</span> 버튼 클릭</p>
+                  <p className="text-slate-300">2. YouTube 채널 URL 또는 @핸들 입력</p>
+                  <p className="text-slate-400 text-xs pl-4">예시: <code className="bg-slate-700 px-1.5 rounded">https://www.youtube.com/@channelname</code></p>
+                  <p className="text-slate-400 text-xs pl-4">예시: <code className="bg-slate-700 px-1.5 rounded">@channelname</code> 만 입력해도 됩니다</p>
+                  <p className="text-slate-300">3. 추가 완료 후 <span className="text-yellow-400">갱신</span> 버튼을 눌러 전체 영상 데이터를 수집하세요</p>
+                  <div className="bg-yellow-900/30 border border-yellow-700/50 rounded p-3 mt-2">
+                    <p className="text-yellow-300 text-xs">⚠️ 첫 갱신 시 영상이 많은 채널(500개↑)은 1~2분 소요될 수 있습니다. 완료될 때까지 기다려 주세요.</p>
+                  </div>
+                </div>
+              </section>
+
+              {/* 탭 설명 */}
+              <section>
+                <h3 className="text-purple-400 font-bold text-base mb-3">📑 탭별 기능 안내</h3>
+                <div className="space-y-2">
+                  {[
+                    { tab:'📊 요약', desc:'채널 핵심 지표, 효율 점수(100점), PPL 수익 분석, 구독자 변화 그래프, 채널 총평을 한눈에 확인합니다.' },
+                    { tab:'💰 손익/BEP', desc:'원가·배송비·MG를 반영한 손익분기점(BEP) 판매수량을 계산합니다. 몇 개 팔아야 본전인지 바로 확인하세요.' },
+                    { tab:'📈 트렌드', desc:'일자별 인게이지먼트·조회수·예상수익 변화를 확인합니다. 갱신할 때마다 데이터가 쌓입니다.' },
+                    { tab:'⚙️ 설정', desc:'PPL 단가·MG·RS·원가를 입력하고, 채널 상태·태그·메모를 관리합니다.' },
+                    { tab:'🎬 롱폼 / ▶️ 미드폼 / 📱 숏폼', desc:'영상 길이별 목록을 확인합니다. 제목 검색, 조회수·날짜 정렬, 50개씩 페이지 이동이 가능합니다.' },
+                    { tab:'📥 내보내기', desc:'채널 분석 보고서를 Markdown 텍스트 또는 Excel 파일로 다운로드합니다.' },
+                  ].map(item => (
+                    <div key={item.tab} className="flex gap-3 bg-slate-800 rounded-lg p-3 border border-slate-700">
+                      <span className="text-white font-semibold shrink-0 w-36">{item.tab}</span>
+                      <span className="text-slate-300">{item.desc}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {/* 효율 점수 */}
+              <section>
+                <h3 className="text-yellow-400 font-bold text-base mb-3">⚡ 효율 점수 이해하기</h3>
+                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                  <p className="text-slate-300 mb-3">총 <span className="text-white font-bold">100점</span> 만점으로, 6개 지표를 중요도에 따라 가중치 배점합니다.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                    {[
+                      { label:'💬 인게이지먼트율', score:'35점', desc:'(좋아요+댓글)÷조회수. 가장 중요한 지표' },
+                      { label:'👥 구독자 대비 조회수', score:'25점', desc:'팬 충성도. 30% 이상이면 우수' },
+                      { label:'📊 조회수 일관성', score:'15점', desc:'영상별 편차. 낮을수록 안정적' },
+                      { label:'📅 업로드 주기', score:'10점', desc:'롱폼 기준. 14일 이내면 활발' },
+                      { label:'📢 광고 비율', score:'10점', desc:'최근 영상 중 광고 비율. 낮을수록 좋음' },
+                      { label:'📆 채널 연령', score:'5점', desc:'5년 이상이면 신뢰도 높음' },
+                    ].map(item => (
+                      <div key={item.label} className="flex justify-between items-start gap-2 bg-slate-700/60 rounded p-2">
+                        <div>
+                          <p className="text-white text-xs font-semibold">{item.label}</p>
+                          <p className="text-slate-400 text-xs">{item.desc}</p>
+                        </div>
+                        <span className="text-yellow-400 font-bold text-xs shrink-0">{item.score}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-3 text-xs">
+                    <span className="bg-green-700/40 text-green-300 px-2 py-1 rounded border border-green-700/60">✅ 75점↑ PPL 적합</span>
+                    <span className="bg-yellow-700/40 text-yellow-300 px-2 py-1 rounded border border-yellow-700/60">⚠️ 50~74점 검토 필요</span>
+                    <span className="bg-red-700/40 text-red-300 px-2 py-1 rounded border border-red-700/60">❌ 50점↓ 비적합</span>
+                  </div>
+                </div>
+              </section>
+
+              {/* PPL 수익 계산 */}
+              <section>
+                <h3 className="text-orange-400 font-bold text-base mb-3">💰 PPL 수익 계산 방법</h3>
+                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 space-y-2">
+                  <p className="text-slate-300">⚙️ 설정 탭에서 아래 항목을 입력하면 자동 계산됩니다.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                    {[
+                      { label:'상품 판매가', example:'예: 89,000원' },
+                      { label:'원가 / 배송비 / 사은품', example:'예: 30,000 / 3,500 / 2,000원' },
+                      { label:'총 MG (최소보장금)', example:'예: 3,000,000원' },
+                      { label:'대행사 MG 분담율', example:'예: 30% (쇼크 부담)' },
+                      { label:'RS율 (매출 배분)', example:'예: 20%' },
+                      { label:'예상 클릭수', example:'조회수 × 인게이지먼트 참고' },
+                    ].map(item => (
+                      <div key={item.label} className="bg-slate-700/60 rounded p-2">
+                        <p className="text-white text-xs font-semibold">{item.label}</p>
+                        <p className="text-slate-400 text-xs">{item.example}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </section>
+
+              {/* 채널 관리 */}
+              <section>
+                <h3 className="text-pink-400 font-bold text-base mb-3">🗂️ 채널 관리 기능</h3>
+                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 space-y-2">
+                  {[
+                    { icon:'🏷️', title:'상태 관리', desc:'관심 / 협의중 / 완료 / 보류로 채널을 분류하고, 왼쪽 목록 상단 필터로 빠르게 검색하세요.' },
+                    { icon:'#️⃣', title:'태그', desc:'건강, 맘채널, 요리 등 자유로운 키워드로 채널을 묶어 관리합니다.' },
+                    { icon:'📝', title:'메모', desc:'담당자, 협의 내용, 특이사항 등을 자유롭게 기록합니다. 요약 탭 상단에 항상 표시됩니다.' },
+                    { icon:'💬', title:'댓글 분석', desc:'요약 탭 하단 "🔍 댓글 분석 실행" 버튼으로 구매의도 댓글 비율, 품질 점수를 분석합니다.' },
+                    { icon:'🔄', title:'자동 갱신', desc:'매일 새벽 3시(KST)에 모든 채널이 자동으로 갱신됩니다. 수동 갱신은 채널 카드의 갱신 버튼을 이용하세요.' },
+                  ].map(item => (
+                    <div key={item.title} className="flex gap-3 items-start">
+                      <span className="text-xl shrink-0 mt-0.5">{item.icon}</span>
+                      <div>
+                        <p className="text-white font-semibold">{item.title}</p>
+                        <p className="text-slate-400">{item.desc}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              {/* 자주 묻는 질문 */}
+              <section>
+                <h3 className="text-cyan-400 font-bold text-base mb-3">❓ 자주 묻는 질문</h3>
+                <div className="space-y-2">
+                  {[
+                    { q:'갱신 버튼을 눌렀는데 오류가 납니다.', a:'서버가 잠시 잠들어 있을 수 있습니다. 10~30초 후 다시 시도하세요. (서버는 5분마다 자동으로 깨어납니다)' },
+                    { q:'구독자 변화 그래프가 보이지 않아요.', a:'갱신을 2번 이상 해야 데이터 포인트가 쌓여 그래프가 표시됩니다.' },
+                    { q:'롱폼 영상이 실제보다 적게 나와요.', a:'갱신 버튼을 눌러 전체 영상을 다시 수집하세요. 최초 등록 시에는 일부만 수집될 수 있습니다.' },
+                    { q:'댓글 분석은 얼마나 걸리나요?', a:'최근 영상 5개 기준 약 30~60초 소요됩니다. 분석 중 다른 작업은 계속 할 수 있습니다.' },
+                    { q:'Excel 내보내기가 안 됩니다.', a:'팝업 차단 설정을 확인하세요. 브라우저에서 이 사이트의 팝업을 허용해 주세요.' },
+                  ].map(item => (
+                    <details key={item.q} className="bg-slate-800 border border-slate-700 rounded-lg">
+                      <summary className="px-4 py-3 text-white cursor-pointer hover:text-blue-300 transition font-medium">{item.q}</summary>
+                      <p className="px-4 pb-3 text-slate-400">{item.a}</p>
+                    </details>
+                  ))}
+                </div>
+              </section>
+
+            </div>
+
+            {/* 하단 닫기 */}
+            <div className="px-6 py-4 border-t border-slate-700 flex justify-end">
+              <button onClick={() => setShowGuide(false)} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-semibold transition">
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
