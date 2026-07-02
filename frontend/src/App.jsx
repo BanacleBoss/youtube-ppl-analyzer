@@ -400,6 +400,33 @@ export default function YouTubeAnalyzer() {
     }
   };
 
+  // 시뮬레이터 조건을 실제 채널 설정에 저장 (설정 → 시뮬레이터는 기존 "설정값으로 초기화" 버튼으로 반대 방향 지원)
+  const handleApplySimToSettings = async () => {
+    if (!selectedChannel) return;
+    const merged = {
+      ...settings,
+      productPrice: sim.productPrice,
+      cost: sim.cost,
+      shippingCost: sim.shippingCost,
+      giftCost: sim.giftCost,
+      pgFeeRate: sim.pgFeeRate,
+      totalMG: sim.totalMG,
+      agencyMGShareRate: sim.agencyMGShareRate,
+      rsRate: sim.rsRate,
+      expectedClicks: sim.expectedClicks,
+      expectedConversionRate: sim.conversionRate,
+    };
+    try {
+      const response = await api.post(`/channels/${selectedChannel._id}/settings`, merged);
+      const updated = response.data;
+      setSettings(merged);
+      setChannels(channels.map(ch => ch._id === selectedChannel._id ? updated : ch));
+      setError('✓ 시뮬레이터 조건이 실제 설정에 저장되었습니다');
+    } catch (err) {
+      setError('설정 저장 실패: ' + (err.response?.data?.error || err.message));
+    }
+  };
+
   const handleGenerateProposal = () => {
     if (!selectedChannel) return;
     const ch = selectedChannel;
@@ -1158,7 +1185,12 @@ export default function YouTubeAnalyzer() {
 
             {discoverResults.length > 0 && (
               <div className="space-y-3 mt-4">
-                <p className="text-slate-300 text-sm font-semibold">검색 결과 {discoverResults.length}개 — PPL 적합도 순 정렬</p>
+                <div className="flex items-center gap-2 mb-1">
+                  <p className="text-slate-300 text-sm font-semibold">검색 결과 {discoverResults.length}개 — PPL 적합도 순 정렬</p>
+                  <InfoTooltip content="아직 등록 전인 채널을 빠르게 스크리닝하기 위한 예비 점수입니다(구독자·인게이지먼트·롱폼비율·최근활동·국가 기준). 채널을 추가하면 영상 데이터를 바탕으로 한 더 정교한 '채널 효율 점수'로 재평가됩니다.">
+                    <span className="text-xs text-slate-500">ⓘ 예비 점수</span>
+                  </InfoTooltip>
+                </div>
                 {discoverResults.map((ch, idx) => {
                   const scoreColor = ch.pplScore >= 70 ? 'text-green-400 bg-green-900' : ch.pplScore >= 40 ? 'text-yellow-400 bg-yellow-900' : 'text-red-400 bg-red-900';
                   const scoreBadge = ch.pplScore >= 70 ? '✅ 강추' : ch.pplScore >= 40 ? '⚠️ 검토' : '❌ 비적합';
@@ -1556,19 +1588,15 @@ export default function YouTubeAnalyzer() {
 
                       {selectedChannel.commentAnalysis?.qualityScore != null ? (() => {
                         const ca = selectedChannel.commentAnalysis;
-                        const engScore = Math.min(parseFloat(pplData.engagement || 0) * 10, 100);
-                        const compositeScore = Math.round((engScore + ca.qualityScore) / 2);
-                        const compositeColor = compositeScore >= 70 ? 'text-green-400' : compositeScore >= 40 ? 'text-yellow-400' : 'text-red-400';
+                        const qualityColor = ca.qualityScore >= 70 ? 'text-green-400' : ca.qualityScore >= 40 ? 'text-yellow-400' : 'text-red-400';
                         return (
                           <div>
-                            {/* 복합 PPL 점수 */}
+                            {/* 댓글 품질 점수 — 인게이지먼트는 위 "채널 효율 점수"에서 이미 반영되므로 중복 집계하지 않음 */}
                             <div className="bg-slate-800 rounded-lg p-4 mb-4 text-center">
-                              <p className="text-slate-400 text-sm mb-1">복합 PPL 점수 <span className="text-xs">(인게이지먼트 + 댓글품질)</span></p>
-                              <p className={`text-5xl font-bold ${compositeColor}`}>{compositeScore}<span className="text-2xl">점</span></p>
-                              <div className="flex justify-center gap-6 mt-2 text-xs text-slate-400">
-                                <span>인게이지먼트 점수: <strong className="text-white">{Math.round(engScore)}점</strong></span>
-                                <span>댓글 품질 점수: <strong className="text-white">{ca.qualityScore}점</strong></span>
-                              </div>
+                              <InfoTooltip content="구매의도 댓글 비율 + 댓글 길이 + 답글 비율 − 부정 반응 비율로 계산되는 댓글 반응 품질 점수입니다. 채널 전반의 지표는 위쪽 '채널 효율 점수'를 참고하세요.">
+                                <p className="text-slate-400 text-sm mb-1">댓글 품질 점수</p>
+                              </InfoTooltip>
+                              <p className={`text-5xl font-bold ${qualityColor}`}>{ca.qualityScore}<span className="text-2xl">점</span></p>
                             </div>
 
                             {/* 세부 지표 */}
@@ -1617,7 +1645,7 @@ export default function YouTubeAnalyzer() {
                           </div>
                         );
                       })() : (
-                        <p className="text-slate-500 text-sm text-center py-4">댓글 분석을 실행하면 구매의도, 댓글 품질, 복합 PPL 점수를 확인할 수 있습니다</p>
+                        <p className="text-slate-500 text-sm text-center py-4">댓글 분석을 실행하면 구매의도, 댓글 품질 점수를 확인할 수 있습니다</p>
                       )}
                     </div>
 
@@ -1945,6 +1973,12 @@ export default function YouTubeAnalyzer() {
                   const simPct = v => (v*100).toFixed(1)+'%';
                   const simNum = v => v.toLocaleString()+'개';
 
+                  // 캠페인 실적 기록(campaignLogs)에서 실측 전환율 평균 계산 — 감이 아닌 과거 데이터 기반 기본값 제공
+                  const validLogs = (selectedChannel?.campaignLogs || []).filter(l => l.expectedClicksSnapshot > 0);
+                  const measuredConversionRate = validLogs.length > 0
+                    ? validLogs.reduce((s, l) => s + (l.actualQty / l.expectedClicksSnapshot), 0) / validLogs.length
+                    : null;
+
                   const SimSlider = ({ label, value, min, max, step, format, onChange }) => (
                     <div>
                       <div className="flex justify-between mb-1">
@@ -1971,7 +2005,7 @@ export default function YouTubeAnalyzer() {
                           <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide">📦 상품 조건</p>
                           <SimSlider label="판매가" value={sim.productPrice} min={10000} max={500000} step={1000} format={simWon} onChange={v => setSim(s=>({...s,productPrice:v}))} />
                           <SimSlider label="원가" value={sim.cost} min={0} max={300000} step={1000} format={simWon} onChange={v => setSim(s=>({...s,cost:v}))} />
-                          <SimSlider label="배송비 + 사은품" value={sim.shippingCost + sim.giftCost} min={0} max={30000} step={1000} format={simWon} onChange={v => setSim(s=>({...s,shippingCost:v}))} />
+                          <SimSlider label="배송비 + 사은품" value={sim.shippingCost + sim.giftCost} min={0} max={30000} step={1000} format={simWon} onChange={v => setSim(s=>({...s,shippingCost:v,giftCost:0}))} />
 
                           <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide pt-2">💰 딜 조건</p>
                           <SimSlider label="총 MG" value={sim.totalMG} min={0} max={20000000} step={10000} format={simWon} onChange={v => setSim(s=>({...s,totalMG:v}))} />
@@ -1982,15 +2016,28 @@ export default function YouTubeAnalyzer() {
                           <SimSlider label="예상 클릭수" value={sim.expectedClicks} min={0} max={10000} step={50} format={v=>v.toLocaleString()+'회'} onChange={v => setSim(s=>({...s,expectedClicks:v}))} />
                           <SimSlider label="전환율" value={sim.conversionRate} min={0.001} max={0.2} step={0.001} format={simPct} onChange={v => setSim(s=>({...s,conversionRate:v}))} />
 
-                          <button onClick={() => setSim({
-                            productPrice: settings.productPrice||89000, cost: settings.cost||30000,
-                            shippingCost: settings.shippingCost||3500, giftCost: settings.giftCost||0,
-                            pgFeeRate: settings.pgFeeRate||0.0385, totalMG: settings.totalMG||3000000,
-                            agencyMGShareRate: settings.agencyMGShareRate||0.3, rsRate: settings.rsRate||0.2,
-                            expectedClicks: settings.expectedClicks||500, conversionRate: settings.expectedConversionRate||0.03,
-                          })} className="w-full text-xs text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 py-2 rounded transition">
-                            ↺ 설정값으로 초기화
-                          </button>
+                          {measuredConversionRate !== null && (
+                            <button onClick={() => setSim(s => ({ ...s, conversionRate: measuredConversionRate }))}
+                              className="w-full text-xs text-blue-300 hover:text-white bg-blue-900/40 hover:bg-blue-800/60 border border-blue-700/50 py-2 rounded transition">
+                              📊 실측 전환율 적용 (캠페인 {validLogs.length}건 평균 {simPct(measuredConversionRate)})
+                            </button>
+                          )}
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <button onClick={() => setSim({
+                              productPrice: settings.productPrice||89000, cost: settings.cost||30000,
+                              shippingCost: settings.shippingCost||3500, giftCost: settings.giftCost||0,
+                              pgFeeRate: settings.pgFeeRate||0.0385, totalMG: settings.totalMG||3000000,
+                              agencyMGShareRate: settings.agencyMGShareRate||0.3, rsRate: settings.rsRate||0.2,
+                              expectedClicks: settings.expectedClicks||500, conversionRate: settings.expectedConversionRate||0.03,
+                            })} className="text-xs text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 py-2 rounded transition">
+                              ↺ 설정값으로 초기화
+                            </button>
+                            <button onClick={handleApplySimToSettings} disabled={!selectedChannel}
+                              className="text-xs text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 py-2 rounded transition font-semibold">
+                              💾 이 조건을 설정에 저장
+                            </button>
+                          </div>
                         </div>
 
                         {/* ── 결과 패널 ── */}
