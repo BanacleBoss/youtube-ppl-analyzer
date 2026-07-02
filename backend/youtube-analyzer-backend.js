@@ -103,9 +103,15 @@ const channelSchema = new mongoose.Schema({
     rsRate: { type: Number, default: 0.2 }            // 대행사에 지급하는 RS(매출 성과 배분) 비율
   },
   
+  // 채널 관리 메타
+  status: { type: String, enum: ['관심', '협의중', '완료', '보류', '미분류'], default: '미분류' },
+  memo: { type: String, default: '' },
+  channelTags: [{ type: String }],
+
   // 일일 누적 통계
   dailyStats: [{
     date: String,
+    subscribers: Number,
     engagement: Number,
     avgViews: Number,
     predictedRevenue: Number,
@@ -562,11 +568,15 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
     if (!todayStats) {
       channel.dailyStats.push({
         date: today,
+        subscribers: channelInfo.subscribers,
         engagement: parseFloat(pplData.engagement),
         avgViews: pplData.avgViews,
         predictedRevenue: pplData.expectedRevenue,
         riskLevel: pplData.riskLevel
       });
+    } else {
+      // 오늘 이미 있으면 구독자 수만 업데이트
+      todayStats.subscribers = channelInfo.subscribers;
     }
 
     channel.channelName = channelInfo.channelName;
@@ -654,6 +664,28 @@ app.delete('/api/channels/:id', async (req, res) => {
   try {
     await Channel.findByIdAndDelete(req.params.id);
     res.json({ message: '채널이 삭제되었습니다' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH: 채널 메타 정보 (상태/메모/태그) 업데이트
+app.patch('/api/channels/:id/meta', async (req, res) => {
+  try {
+    const { status, memo, channelTags } = req.body;
+    const channel = await Channel.findById(req.params.id);
+    if (!channel) return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
+
+    const allowed = ['관심', '협의중', '완료', '보류', '미분류'];
+    if (status !== undefined) {
+      if (!allowed.includes(status)) return res.status(400).json({ error: '유효하지 않은 상태값입니다' });
+      channel.status = status;
+    }
+    if (memo !== undefined) channel.memo = memo;
+    if (channelTags !== undefined) channel.channelTags = channelTags;
+
+    await channel.save();
+    res.json({ status: channel.status, memo: channel.memo, channelTags: channel.channelTags });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1097,8 +1129,11 @@ async function setupScheduling() {
         // 채널 간 5초 딜레이 — YouTube API 쿼터 보호
         await new Promise(res => setTimeout(res, 5000));
         try {
+          const channelInfo = await analyzer.getChannelInfo(channel.channelId);
           const videos = await analyzer.getChannelVideos(channel.channelId);
           channel.videos = videos;
+          channel.subscribers = channelInfo.subscribers;
+          channel.totalViews = channelInfo.totalViews;
           channel.lastUpdated = new Date();
 
           const pplData = calculatePPLSummary(videos, channel.pplSettings);
@@ -1108,11 +1143,14 @@ async function setupScheduling() {
           if (!todayStats) {
             channel.dailyStats.push({
               date: today,
+              subscribers: channelInfo.subscribers,
               engagement: parseFloat(pplData.engagement),
               avgViews: pplData.avgViews,
               predictedRevenue: pplData.expectedRevenue,
               riskLevel: pplData.riskLevel
             });
+          } else {
+            todayStats.subscribers = channelInfo.subscribers;
           }
 
           await channel.save();

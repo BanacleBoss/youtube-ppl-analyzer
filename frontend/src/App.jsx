@@ -61,6 +61,12 @@ export default function YouTubeAnalyzer() {
   // 캠페인 실적 기록
   const [campaignLogForm, setCampaignLogForm] = useState({ date: '', actualQty: '', actualRevenue: '', note: '' });
 
+  // 채널 메타 (상태/메모/태그)
+  const [metaForm, setMetaForm] = useState({ status: '미분류', memo: '', channelTags: [] });
+  const [metaTagInput, setMetaTagInput] = useState('');
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('전체');
+
   useEffect(() => { loadChannels(); loadItems(); }, []);
   // 탭/채널 변경 시 페이지·검색 초기화
   useEffect(() => { setVideoPage(1); setVideoSearch(''); }, [activeTab, selectedChannelId]);
@@ -83,6 +89,14 @@ export default function YouTubeAnalyzer() {
         agencyMGShareRate: ch.pplSettings.agencyMGShareRate ?? 0.3,
         rsRate: ch.pplSettings.rsRate ?? 0.2,
       });
+    // 채널 메타 폼 초기화
+    if (ch) {
+      setMetaForm({
+        status: ch.status || '미분류',
+        memo: ch.memo || '',
+        channelTags: ch.channelTags || [],
+      });
+      setMetaTagInput('');
     }
   }, [selectedChannelId, channels]);
 
@@ -318,6 +332,20 @@ export default function YouTubeAnalyzer() {
       setError('채널 추가 실패: ' + (err.response?.data?.error || err.message));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSaveMeta = async () => {
+    if (!selectedChannel) return;
+    setSavingMeta(true);
+    try {
+      const response = await api.patch(`/channels/${selectedChannel._id}/meta`, metaForm);
+      setChannels(channels.map(ch => ch._id === selectedChannel._id ? { ...ch, ...response.data } : ch));
+      setError('✓ 채널 정보가 저장되었습니다');
+    } catch (err) {
+      setError('저장 실패: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setSavingMeta(false);
     }
   };
 
@@ -1058,18 +1086,33 @@ export default function YouTubeAnalyzer() {
                     <button key={val} onClick={() => setChannelSortBy(val)} className={`flex-1 text-xs py-1.5 rounded transition font-medium ${channelSortBy === val ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>{label}</button>
                   ))}
                 </div>
+                {/* 상태 필터 */}
+                <div className="flex gap-1 flex-wrap">
+                  {['전체','관심','협의중','완료','보류','미분류'].map(s => {
+                    const statusStyle = { '관심':'bg-blue-500/20 text-blue-400 border-blue-500/40', '협의중':'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', '완료':'bg-green-500/20 text-green-400 border-green-500/40', '보류':'bg-red-500/20 text-red-400 border-red-500/40', '미분류':'bg-slate-500/20 text-slate-400 border-slate-500/40', '전체':'bg-slate-700 text-slate-300 border-slate-600' };
+                    const isActive = statusFilter === s;
+                    return (
+                      <button key={s} onClick={() => setStatusFilter(s)} className={`text-xs px-2 py-0.5 rounded-full border transition ${isActive ? (statusStyle[s] || 'bg-slate-700 text-white border-slate-500') : 'bg-slate-800 text-slate-500 border-slate-700 hover:border-slate-500'}`}>{s}</button>
+                    );
+                  })}
+                </div>
               </div>
-              <div className="space-y-2 overflow-y-auto" style={{maxHeight:'calc(100vh - 280px)'}}>
+              <div className="space-y-2 overflow-y-auto" style={{maxHeight:'calc(100vh - 320px)'}}>
                 {(() => {
                   let list = [...channels];
                   if (channelSearch.trim()) list = list.filter(ch => ch.channelName?.toLowerCase().includes(channelSearch.toLowerCase()));
+                  if (statusFilter !== '전체') list = list.filter(ch => (ch.status || '미분류') === statusFilter);
                   if (channelSortBy === 'score') list.sort((a,b) => calculateEfficiencyScore(b).total - calculateEfficiencyScore(a).total);
                   else if (channelSortBy === 'subscribers') list.sort((a,b) => (b.subscribers||0) - (a.subscribers||0));
                   else list.sort((a,b) => (a.channelName||'').localeCompare(b.channelName||'', 'ko'));
                   if (list.length === 0) return <p className="text-slate-500 text-sm text-center py-6">검색 결과가 없습니다</p>;
+
+                  const statusBadge = { '관심':'bg-blue-500/20 text-blue-400 border-blue-500/40', '협의중':'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', '완료':'bg-green-500/20 text-green-400 border-green-500/40', '보류':'bg-red-500/20 text-red-400 border-red-500/40' };
+
                   return list.map(channel => {
                     const eff = calculateEfficiencyScore(channel);
                     const badgeColor = eff.total >= 75 ? 'bg-green-500/20 text-green-400 border-green-500/40' : eff.total >= 50 ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40' : 'bg-red-500/20 text-red-400 border-red-500/40';
+                    const st = channel.status || '미분류';
                     return (
                       <div key={channel._id} onClick={() => setSelectedChannelId(channel._id)} className={`p-3.5 rounded-xl border cursor-pointer transition-all ${selectedChannelId === channel._id ? 'bg-blue-950/60 border-blue-500 ring-1 ring-blue-500/50 shadow-lg shadow-blue-900/20' : 'bg-slate-800/80 border-slate-700/80 hover:border-slate-600 hover:bg-slate-800'}`}>
                         <div className="flex items-center gap-3 mb-2">
@@ -1084,6 +1127,12 @@ export default function YouTubeAnalyzer() {
                             <p className="text-xs text-slate-400">구독자 {channel.subscribers >= 1000000 ? (channel.subscribers/1000000).toFixed(1)+'M' : (channel.subscribers/1000).toFixed(0)+'K'}</p>
                           </div>
                           <span className={`flex-shrink-0 text-xs font-bold px-2 py-0.5 rounded-full border ${badgeColor}`}>{eff.total}점</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+                          {st !== '미분류' && <span className={`text-xs px-1.5 py-0.5 rounded-full border ${statusBadge[st] || 'bg-slate-500/20 text-slate-400 border-slate-500/40'}`}>{st}</span>}
+                          {(channel.channelTags || []).slice(0,2).map(tag => (
+                            <span key={tag} className="text-xs px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/40">#{tag}</span>
+                          ))}
                         </div>
                         <p className="text-xs text-slate-500 mb-1.5">롱폼 {filterVideos(channel.videos, 'longform').length} · 미드 {filterVideos(channel.videos, 'mid').length} · 숏폼 {filterVideos(channel.videos, 'shorts').length}</p>
                         {channel.lastUpdated && <p className="text-xs text-slate-600 mb-2">{new Date(channel.lastUpdated).toLocaleDateString('ko-KR', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})} 갱신</p>}
@@ -1120,7 +1169,27 @@ export default function YouTubeAnalyzer() {
 
                 {activeTab === 'summary' && (
                   <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-                    <h2 className="text-2xl font-bold text-white mb-2">{selectedChannel.channelName}</h2>
+                    <div className="flex items-start justify-between gap-3 mb-2">
+                      <h2 className="text-2xl font-bold text-white">{selectedChannel.channelName}</h2>
+                      {(() => {
+                        const st = selectedChannel.status || '미분류';
+                        const statusStyle = { '관심':'bg-blue-500/20 text-blue-400 border-blue-500/40', '협의중':'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', '완료':'bg-green-500/20 text-green-400 border-green-500/40', '보류':'bg-red-500/20 text-red-400 border-red-500/40' };
+                        if (st === '미분류') return null;
+                        return <span className={`flex-shrink-0 text-sm px-3 py-1 rounded-full border font-medium ${statusStyle[st]}`}>{st}</span>;
+                      })()}
+                    </div>
+                    {selectedChannel.channelTags?.length > 0 && (
+                      <div className="flex gap-1.5 flex-wrap mb-2">
+                        {selectedChannel.channelTags.map(tag => (
+                          <span key={tag} className="text-xs px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/40">#{tag}</span>
+                        ))}
+                      </div>
+                    )}
+                    {selectedChannel.memo && (
+                      <div className="bg-slate-700/60 border border-slate-600 rounded-lg px-3 py-2 mb-3 text-sm text-slate-300">
+                        📝 {selectedChannel.memo}
+                      </div>
+                    )}
                     <p className="text-slate-400 text-sm mb-4">✨ 최근 10개 롱폼(10분↑) 영상 기준 PPL 분석</p>
                     <div className="grid grid-cols-2 gap-4 mb-6">
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">총 조회수</p><p className="text-2xl font-bold text-white mt-1">{(selectedChannel.totalViews / 1000000000).toFixed(1)}B</p></div>
@@ -1249,6 +1318,59 @@ export default function YouTubeAnalyzer() {
                               </LineChart>
                             </ResponsiveContainer>
                           )}
+                        </div>
+                      );
+                    })()}
+
+                    {/* 구독자 변화 트래킹 */}
+                    {(() => {
+                      const stats = (selectedChannel.dailyStats || [])
+                        .filter(d => d.subscribers)
+                        .sort((a, b) => a.date.localeCompare(b.date));
+                      if (stats.length < 2) return null;
+                      const chartData = stats.map(d => ({
+                        date: d.date.slice(5), // MM-DD
+                        subscribers: d.subscribers,
+                      }));
+                      const first = stats[0].subscribers;
+                      const last = stats[stats.length - 1].subscribers;
+                      const growthAbs = last - first;
+                      const growthPct = first > 0 ? ((growthAbs / first) * 100).toFixed(1) : '0.0';
+                      const isUp = growthAbs >= 0;
+                      return (
+                        <div className="bg-slate-700 border border-slate-600 rounded-lg p-5 mt-4">
+                          <h3 className="text-lg font-bold text-white mb-1">📈 구독자 변화 트래킹</h3>
+                          <p className="text-xs text-slate-400 mb-4">채널 갱신마다 스냅샷 저장 — {stats.length}개 데이터 포인트</p>
+                          <div className="grid grid-cols-3 gap-3 mb-4">
+                            <div className="bg-slate-800 rounded p-3 text-center">
+                              <p className="text-slate-400 text-xs mb-1">첫 기록</p>
+                              <p className="text-lg font-bold text-white">{first >= 1000000 ? (first/1000000).toFixed(1)+'M' : (first/1000).toFixed(0)+'K'}</p>
+                              <p className="text-xs text-slate-500">{stats[0].date}</p>
+                            </div>
+                            <div className="bg-slate-800 rounded p-3 text-center">
+                              <p className="text-slate-400 text-xs mb-1">최근</p>
+                              <p className="text-lg font-bold text-white">{last >= 1000000 ? (last/1000000).toFixed(1)+'M' : (last/1000).toFixed(0)+'K'}</p>
+                              <p className="text-xs text-slate-500">{stats[stats.length-1].date}</p>
+                            </div>
+                            <div className={`rounded p-3 text-center border ${isUp ? 'bg-green-900/40 border-green-700' : 'bg-red-900/40 border-red-700'}`}>
+                              <p className="text-slate-400 text-xs mb-1">증감</p>
+                              <p className={`text-lg font-bold flex items-center justify-center gap-1 ${isUp ? 'text-green-400' : 'text-red-400'}`}>
+                                {isUp ? <ArrowUp size={16}/> : <ArrowDown size={16}/>}
+                                {Math.abs(growthAbs) >= 1000 ? (Math.abs(growthAbs)/1000).toFixed(1)+'K' : Math.abs(growthAbs)}
+                              </p>
+                              <p className={`text-xs ${isUp ? 'text-green-400' : 'text-red-400'}`}>{isUp ? '+' : ''}{growthPct}%</p>
+                            </div>
+                          </div>
+                          <ResponsiveContainer width="100%" height={160}>
+                            <LineChart data={chartData}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#475569" />
+                              <XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+                              <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={v => v >= 1000000 ? (v/1000000).toFixed(1)+'M' : (v/1000).toFixed(0)+'K'} />
+                              <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', color: '#e2e8f0', fontSize: 12 }}
+                                formatter={v => [v >= 1000000 ? (v/1000000).toFixed(2)+'M' : (v/1000).toFixed(1)+'K', '구독자']} />
+                              <Line type="monotone" dataKey="subscribers" stroke="#a78bfa" strokeWidth={2} dot={{ fill: '#a78bfa', r: 3 }} activeDot={{ r: 5 }} />
+                            </LineChart>
+                          </ResponsiveContainer>
                         </div>
                       );
                     })()}
@@ -1562,6 +1684,62 @@ export default function YouTubeAnalyzer() {
                       </div>
 
                       <div className="flex gap-4 pt-4"><button onClick={handleSaveSettings} className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded transition font-semibold">저장</button><button onClick={() => setActiveTab('summary')} className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded transition">취소</button></div>
+                    </div>
+
+                    {/* ── 채널 관리 (상태 / 메모 / 태그) ── */}
+                    <div className="mt-6 pt-6 border-t border-slate-700">
+                      <h3 className="text-lg font-bold text-white mb-4">🗂️ 채널 관리</h3>
+                      <div className="space-y-4">
+                        {/* 상태 */}
+                        <div>
+                          <label className="block text-slate-300 text-sm mb-2">진행 상태</label>
+                          <div className="flex gap-2 flex-wrap">
+                            {[
+                              { v:'관심', color:'bg-blue-600 border-blue-500', inactive:'bg-slate-700 text-slate-400 border-slate-600 hover:border-blue-500' },
+                              { v:'협의중', color:'bg-yellow-600 border-yellow-500', inactive:'bg-slate-700 text-slate-400 border-slate-600 hover:border-yellow-500' },
+                              { v:'완료', color:'bg-green-600 border-green-500', inactive:'bg-slate-700 text-slate-400 border-slate-600 hover:border-green-500' },
+                              { v:'보류', color:'bg-red-700 border-red-500', inactive:'bg-slate-700 text-slate-400 border-slate-600 hover:border-red-500' },
+                              { v:'미분류', color:'bg-slate-500 border-slate-400', inactive:'bg-slate-700 text-slate-400 border-slate-600 hover:border-slate-400' },
+                            ].map(({ v, color, inactive }) => (
+                              <button key={v} onClick={() => setMetaForm(f => ({...f, status: v}))}
+                                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition ${metaForm.status === v ? color + ' text-white' : inactive}`}>
+                                {v}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {/* 태그 */}
+                        <div>
+                          <label className="block text-slate-300 text-sm mb-2">태그</label>
+                          <div className="flex gap-2 mb-2 flex-wrap">
+                            {metaForm.channelTags.map(tag => (
+                              <span key={tag} className="flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/40">
+                                #{tag}
+                                <button onClick={() => setMetaForm(f => ({...f, channelTags: f.channelTags.filter(t => t !== tag)}))} className="text-purple-400 hover:text-white ml-0.5">×</button>
+                              </span>
+                            ))}
+                          </div>
+                          <div className="flex gap-2">
+                            <input type="text" value={metaTagInput} onChange={e => setMetaTagInput(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter' && metaTagInput.trim()) { setMetaForm(f => ({...f, channelTags: [...new Set([...f.channelTags, metaTagInput.trim()])]})); setMetaTagInput(''); }}}
+                              placeholder="태그 입력 후 Enter (예: 건강, 맘채널)"
+                              className="flex-1 bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500" />
+                            <button onClick={() => { if (metaTagInput.trim()) { setMetaForm(f => ({...f, channelTags: [...new Set([...f.channelTags, metaTagInput.trim()])]})); setMetaTagInput(''); }}}
+                              className="bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded text-sm transition">추가</button>
+                          </div>
+                        </div>
+                        {/* 메모 */}
+                        <div>
+                          <label className="block text-slate-300 text-sm mb-2">메모</label>
+                          <textarea value={metaForm.memo} onChange={e => setMetaForm(f => ({...f, memo: e.target.value}))}
+                            rows={3} placeholder="담당자, 협의 내용, 특이사항 등 자유롭게..."
+                            className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none" />
+                        </div>
+                        <button onClick={handleSaveMeta} disabled={savingMeta}
+                          className="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white py-2 rounded transition font-semibold text-sm">
+                          {savingMeta ? '저장 중...' : '💾 채널 정보 저장'}
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
