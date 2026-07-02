@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle, Package, Pencil } from 'lucide-react';
 import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog } from './api';
 
@@ -390,6 +390,117 @@ export default function YouTubeAnalyzer() {
     } catch (err) {
       setError('설정 저장 실패: ' + (err.response?.data?.error || err.message));
     }
+  };
+
+  const handleGenerateProposal = () => {
+    if (!selectedChannel) return;
+    const ch = selectedChannel;
+    const eff = calculateEfficiencyScore(ch);
+    const ppl = calculatePPLRevenue(ch.videos);
+    const lf = filterVideos(ch.videos, 'longform');
+    const assessment = generateChannelAssessment(ch);
+    const subsText = ch.subscribers >= 1000000 ? `${(ch.subscribers/1000000).toFixed(1)}M` : `${(ch.subscribers/1000).toFixed(0)}K`;
+    const scoreColor = eff.total >= 75 ? '#22c55e' : eff.total >= 50 ? '#eab308' : '#ef4444';
+    const grade = eff.total >= 75 ? 'PPL 적합 ✅' : eff.total >= 50 ? '검토 필요 ⚠️' : '비적합 ❌';
+
+    const rows = (items) => items.map(([k,v]) => `<tr><td style="color:#94a3b8;padding:8px 12px;border-bottom:1px solid #334155;font-size:13px">${k}</td><td style="color:#f1f5f9;padding:8px 12px;border-bottom:1px solid #334155;font-size:13px;font-weight:600;text-align:right">${v}</td></tr>`).join('');
+
+    const assessmentHtml = assessment.map(sec => `
+      <div style="background:${sec.highlight?'#1e3a2f':'#1e293b'};border:1px solid ${sec.highlight?'#22c55e':'#334155'};border-radius:8px;padding:14px;margin-bottom:10px">
+        <div style="color:${sec.highlight?'#86efac':'#94a3b8'};font-size:13px;font-weight:700;margin-bottom:6px">${sec.title}</div>
+        <div style="color:${sec.highlight?'#bbf7d0':'#cbd5e1'};font-size:13px;line-height:1.7">${sec.body}</div>
+      </div>`).join('');
+
+    const html = `<!DOCTYPE html>
+<html lang="ko"><head><meta charset="UTF-8">
+<title>PPL 제안서 — ${ch.channelName}</title>
+<style>
+  body{margin:0;padding:0;background:#0f172a;color:#f1f5f9;font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .page{max-width:800px;margin:0 auto;padding:40px 32px}
+  @media print{body{background:#fff;color:#111}.dark{background:#fff!important;color:#111!important}}
+  .print-btn{position:fixed;top:16px;right:16px;background:#3b82f6;color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:700;z-index:999}
+  .print-btn:hover{background:#2563eb}
+  @media print{.print-btn{display:none}}
+</style>
+</head><body>
+<button class="print-btn" onclick="window.print()">🖨️ PDF 저장</button>
+<div class="page">
+  <!-- 헤더 -->
+  <div style="border-bottom:2px solid #3b82f6;padding-bottom:24px;margin-bottom:28px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div style="color:#3b82f6;font-size:12px;font-weight:700;letter-spacing:2px;margin-bottom:6px">PPL PROPOSAL</div>
+        <h1 style="margin:0;font-size:28px;font-weight:800;color:#f1f5f9">${ch.channelName}</h1>
+        <div style="color:#64748b;font-size:13px;margin-top:6px">작성일: ${new Date().toLocaleDateString('ko-KR', {year:'numeric',month:'long',day:'numeric'})} &nbsp;·&nbsp; YouTube Channel Analyzer</div>
+      </div>
+      <div style="text-align:center;background:#1e293b;border:2px solid ${scoreColor};border-radius:12px;padding:16px 24px">
+        <div style="color:#94a3b8;font-size:11px;font-weight:700;letter-spacing:1px">효율 점수</div>
+        <div style="color:${scoreColor};font-size:36px;font-weight:900;line-height:1">${eff.total}</div>
+        <div style="color:#64748b;font-size:11px">/ 100점</div>
+        <div style="color:${scoreColor};font-size:12px;font-weight:700;margin-top:4px">${grade}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 채널 기본 지표 -->
+  <h2 style="color:#3b82f6;font-size:15px;font-weight:700;letter-spacing:1px;margin-bottom:12px">📊 채널 기본 지표</h2>
+  <table style="width:100%;border-collapse:collapse;background:#1e293b;border-radius:8px;overflow:hidden;margin-bottom:28px">
+    ${rows([
+      ['구독자 수', subsText],
+      ['총 조회수', `${(ch.totalViews/100000000).toFixed(1)}억 회`],
+      ['롱폼 영상 수', `${lf.length}개`],
+      ['평균 조회수 (롱폼 10개)', `${(ppl.avgViews/1000).toFixed(1)}K`],
+      ['인게이지먼트율', `${ppl.engagement}%`],
+      ['채널 운영 기간', eff.details.channelAgeYears ? `${eff.details.channelAgeYears}년` : '-'],
+    ])}
+  </table>
+
+  <!-- 효율 점수 세부 -->
+  <h2 style="color:#3b82f6;font-size:15px;font-weight:700;letter-spacing:1px;margin-bottom:12px">⚡ 효율 점수 세부 내역</h2>
+  <table style="width:100%;border-collapse:collapse;background:#1e293b;border-radius:8px;overflow:hidden;margin-bottom:28px">
+    ${rows([
+      ['💬 인게이지먼트율', `${eff.details.engRate}% → ${eff.details.engScore}/35점`],
+      ['👥 구독자 대비 조회수', `${eff.details.viewsRatio}% → ${eff.details.viewsScore}/25점`],
+      ['📊 조회수 일관성 (CV)', `${eff.details.cvPercent ?? '-'}% → ${eff.details.consistencyScore}/15점`],
+      ['📅 평균 업로드 주기', `${eff.details.avgGapDays ?? '-'}일 → ${eff.details.uploadScore}/10점`],
+      ['📢 최근 광고 비율', `${eff.details.adRatio}% → ${eff.details.adScore}/10점`],
+      ['📆 채널 연령', `${eff.details.channelAgeYears ?? '-'}년 → ${eff.details.ageScore}/5점`],
+    ])}
+  </table>
+
+  <!-- PPL 수익 분석 -->
+  <h2 style="color:#3b82f6;font-size:15px;font-weight:700;letter-spacing:1px;margin-bottom:12px">💰 PPL 수익 분석</h2>
+  <table style="width:100%;border-collapse:collapse;background:#1e293b;border-radius:8px;overflow:hidden;margin-bottom:28px">
+    ${rows([
+      ['상품 객단가', `${settings.productPrice.toLocaleString()}원`],
+      ['총 MG', `${settings.totalMG.toLocaleString()}원`],
+      ['우리측 MG 부담', `${ppl.ourMGShare?.toLocaleString()}원`],
+      ['예상 클릭수', `${ppl.expectedClicks?.toLocaleString()}회`],
+      ['예상 판매수량', `${ppl.estimatedQty?.toLocaleString()}개`],
+      ['예상 매출', `${ppl.expectedRevenue?.toLocaleString()}원`],
+      ['순이익', `${ppl.netProfit?.toLocaleString()}원`],
+      ['ROI', ppl.roi !== null ? `${ppl.roi}%` : '계산 불가'],
+      ['위험도', ppl.riskLevel],
+    ])}
+  </table>
+
+  <!-- 채널 총평 -->
+  <h2 style="color:#3b82f6;font-size:15px;font-weight:700;letter-spacing:1px;margin-bottom:12px">💡 채널 종합 총평</h2>
+  ${assessmentHtml}
+
+  <!-- 푸터 -->
+  <div style="margin-top:40px;padding-top:16px;border-top:1px solid #334155;display:flex;justify-content:space-between;align-items:center">
+    <div style="color:#475569;font-size:11px">YouTube Channel Analyzer · Built by Jay Jeong</div>
+    <div style="color:#475569;font-size:11px">${new Date().toLocaleDateString('ko-KR')}</div>
+  </div>
+</div>
+</body></html>`;
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, '_blank');
+    if (win) win.focus();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
   const handleExportExcel = async () => {
@@ -1197,9 +1308,9 @@ export default function YouTubeAnalyzer() {
             {selectedChannel && (
               <div className="lg:col-span-2 space-y-6">
                 <div className="flex gap-1.5 overflow-x-auto pb-1 -mx-1 px-1">
-                  {['summary', 'bep', 'trends', 'settings', 'longform', 'mid', 'shorts', 'export'].map(tab => (
+                  {['summary', 'simulator', 'bep', 'trends', 'settings', 'longform', 'mid', 'shorts', 'export'].map(tab => (
                     <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3.5 py-2 rounded-lg font-medium text-sm transition whitespace-nowrap flex-shrink-0 ${activeTab === tab ? 'bg-blue-600 text-white shadow shadow-blue-900/40' : 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-slate-200'}`}>
-                      {tab === 'summary' && '📊 요약'} {tab === 'longform' && '🎬 롱폼(10분↑)'} {tab === 'mid' && '▶️ 미드폼(1~10분)'} {tab === 'shorts' && '📱 숏폼(60초↓)'} {tab === 'settings' && '⚙️ 설정'} {tab === 'bep' && '💰 손익/BEP'} {tab === 'trends' && '📈 트렌드'} {tab === 'export' && '📥 내보내기'}
+                      {tab === 'summary' && '📊 요약'} {tab === 'simulator' && '🎛️ 시뮬레이터'} {tab === 'longform' && '🎬 롱폼(10분↑)'} {tab === 'mid' && '▶️ 미드폼(1~10분)'} {tab === 'shorts' && '📱 숏폼(60초↓)'} {tab === 'settings' && '⚙️ 설정'} {tab === 'bep' && '💰 손익/BEP'} {tab === 'trends' && '📈 트렌드'} {tab === 'export' && '📥 내보내기'}
                     </button>
                   ))}
                   {compareMode && compareChannelIds.length >= 2 && (
@@ -1786,6 +1897,176 @@ export default function YouTubeAnalyzer() {
                   </div>
                 )}
 
+                {activeTab === 'simulator' && (() => {
+                  // 시뮬레이터 전용 로컬 state — 이 탭이 렌더될 때만 동작
+                  const SimulatorTab = () => {
+                    const [sim, setSim] = React.useState({
+                      productPrice: settings.productPrice || 89000,
+                      cost: settings.cost || 30000,
+                      shippingCost: settings.shippingCost || 3500,
+                      giftCost: settings.giftCost || 0,
+                      pgFeeRate: settings.pgFeeRate || 0.0385,
+                      totalMG: settings.totalMG || 3000000,
+                      agencyMGShareRate: settings.agencyMGShareRate || 0.3,
+                      rsRate: settings.rsRate || 0.2,
+                      expectedClicks: settings.expectedClicks || 500,
+                      conversionRate: settings.expectedConversionRate || 0.03,
+                    });
+
+                    const calc = (s) => {
+                      const ourMG = s.totalMG * (1 - s.agencyMGShareRate);
+                      const qty = Math.round(s.expectedClicks * s.conversionRate);
+                      const revenue = qty * s.productPrice;
+                      const pgFee = s.productPrice * s.pgFeeRate;
+                      const rsAmount = s.productPrice * s.rsRate;
+                      const unitMargin = s.productPrice - s.cost - s.shippingCost - s.giftCost - pgFee - rsAmount;
+                      const grossProfit = qty * unitMargin;
+                      const netProfit = grossProfit - ourMG;
+                      const roi = ourMG > 0 ? Math.round(netProfit / ourMG * 100) : null;
+                      const roas = ourMG > 0 ? Math.round(revenue / ourMG * 100) : null;
+                      const bepQty = unitMargin > 0 ? Math.ceil(ourMG / unitMargin) : null;
+                      return { ourMG, qty, revenue, unitMargin, grossProfit, netProfit, roi, roas, bepQty };
+                    };
+
+                    const r = calc(sim);
+
+                    // 시나리오 (클릭수 ×0.5 / ×1 / ×2)
+                    const scenarios = [
+                      { label: '😰 비관', clicks: Math.round(sim.expectedClicks * 0.5), color: 'border-red-600 bg-red-900/20' },
+                      { label: '😐 기본', clicks: sim.expectedClicks, color: 'border-yellow-600 bg-yellow-900/20' },
+                      { label: '😊 낙관', clicks: Math.round(sim.expectedClicks * 2), color: 'border-green-600 bg-green-900/20' },
+                    ].map(sc => ({ ...sc, ...calc({ ...sim, expectedClicks: sc.clicks }) }));
+
+                    // 수량-수익 곡선 데이터
+                    const curveData = Array.from({ length: 11 }, (_, i) => {
+                      const qty = Math.round(r.bepQty ? r.bepQty * i * 0.25 : sim.expectedClicks * sim.conversionRate * i * 0.2);
+                      return { qty, profit: qty * r.unitMargin - r.ourMG };
+                    });
+
+                    const Slider = ({ label, value, min, max, step, format, onChange }) => (
+                      <div>
+                        <div className="flex justify-between mb-1">
+                          <span className="text-slate-300 text-xs">{label}</span>
+                          <span className="text-white text-xs font-bold">{format(value)}</span>
+                        </div>
+                        <input type="range" min={min} max={max} step={step} value={value}
+                          onChange={e => onChange(Number(e.target.value))}
+                          className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-slate-600 accent-blue-500" />
+                        <div className="flex justify-between text-slate-600 text-xs mt-0.5">
+                          <span>{format(min)}</span><span>{format(max)}</span>
+                        </div>
+                      </div>
+                    );
+
+                    const won = v => v >= 1000000 ? (v/1000000).toFixed(1)+'M원' : v >= 10000 ? (v/10000).toFixed(0)+'만원' : v.toLocaleString()+'원';
+                    const pct = v => (v*100).toFixed(1)+'%';
+                    const num = v => v.toLocaleString()+'개';
+
+                    return (
+                      <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+                        <h3 className="text-lg font-bold text-white mb-1">🎛️ PPL 수익 시뮬레이터</h3>
+                        <p className="text-slate-400 text-xs mb-5">슬라이더를 조절하면 손익이 실시간으로 변경됩니다. 설정 탭과 독립적으로 동작합니다.</p>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                          {/* ── 슬라이더 패널 ── */}
+                          <div className="space-y-4">
+                            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide">📦 상품 조건</p>
+                            <Slider label="판매가" value={sim.productPrice} min={10000} max={500000} step={1000} format={won} onChange={v => setSim(s=>({...s,productPrice:v}))} />
+                            <Slider label="원가" value={sim.cost} min={0} max={300000} step={1000} format={won} onChange={v => setSim(s=>({...s,cost:v}))} />
+                            <Slider label="배송비 + 사은품" value={sim.shippingCost + sim.giftCost} min={0} max={30000} step={500} format={won} onChange={v => setSim(s=>({...s,shippingCost:v}))} />
+
+                            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide pt-2">💰 딜 조건</p>
+                            <Slider label="총 MG" value={sim.totalMG} min={0} max={20000000} step={100000} format={won} onChange={v => setSim(s=>({...s,totalMG:v}))} />
+                            <Slider label="대행사 MG 분담률" value={sim.agencyMGShareRate} min={0} max={1} step={0.05} format={pct} onChange={v => setSim(s=>({...s,agencyMGShareRate:v}))} />
+                            <Slider label="RS율 (매출 배분)" value={sim.rsRate} min={0} max={0.5} step={0.01} format={pct} onChange={v => setSim(s=>({...s,rsRate:v}))} />
+
+                            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide pt-2">🖱️ 전환 조건</p>
+                            <Slider label="예상 클릭수" value={sim.expectedClicks} min={0} max={10000} step={50} format={v=>v.toLocaleString()+'회'} onChange={v => setSim(s=>({...s,expectedClicks:v}))} />
+                            <Slider label="전환율" value={sim.conversionRate} min={0.001} max={0.2} step={0.001} format={pct} onChange={v => setSim(s=>({...s,conversionRate:v}))} />
+
+                            <button onClick={() => setSim({
+                              productPrice: settings.productPrice||89000, cost: settings.cost||30000,
+                              shippingCost: settings.shippingCost||3500, giftCost: settings.giftCost||0,
+                              pgFeeRate: settings.pgFeeRate||0.0385, totalMG: settings.totalMG||3000000,
+                              agencyMGShareRate: settings.agencyMGShareRate||0.3, rsRate: settings.rsRate||0.2,
+                              expectedClicks: settings.expectedClicks||500, conversionRate: settings.expectedConversionRate||0.03,
+                            })} className="w-full text-xs text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 py-2 rounded transition">
+                              ↺ 설정값으로 초기화
+                            </button>
+                          </div>
+
+                          {/* ── 결과 패널 ── */}
+                          <div className="space-y-4">
+                            {/* 핵심 지표 */}
+                            <div className={`rounded-xl p-5 border-2 text-center ${r.netProfit >= 0 ? 'bg-green-900/30 border-green-500' : 'bg-red-900/30 border-red-500'}`}>
+                              <p className="text-slate-300 text-sm mb-1">순이익</p>
+                              <p className={`text-4xl font-bold ${r.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                {r.netProfit >= 0 ? '+' : ''}{won(r.netProfit)}
+                              </p>
+                              <div className="flex justify-center gap-4 mt-2 text-xs text-slate-400">
+                                <span>ROI <strong className={r.roi >= 0 ? 'text-green-400' : 'text-red-400'}>{r.roi !== null ? r.roi+'%' : '-'}</strong></span>
+                                <span>ROAS <strong className="text-blue-400">{r.roas !== null ? r.roas+'%' : '-'}</strong></span>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              {[
+                                { label:'우리측 MG', value: won(r.ourMG), sub:'대행사 제외' },
+                                { label:'개당 기여마진', value: won(r.unitMargin), sub: r.unitMargin >= 0 ? '마진 있음 ✓' : '마진 없음 ✗' },
+                                { label:'예상 판매수량', value: num(r.qty), sub:`클릭 ${sim.expectedClicks.toLocaleString()}회 × ${pct(sim.conversionRate)}` },
+                                { label:'예상 매출', value: won(r.revenue), sub:'판매수량 × 판매가' },
+                                { label:'BEP 판매수량', value: r.bepQty !== null ? num(r.bepQty) : '-', sub: r.bepQty !== null ? (r.qty >= r.bepQty ? '✅ BEP 달성' : '⚠️ BEP 미달') : '-' },
+                                { label:'총 기여이익', value: won(r.grossProfit), sub:'판매수량 × 기여마진' },
+                              ].map(item => (
+                                <div key={item.label} className="bg-slate-700/80 rounded-lg p-3">
+                                  <p className="text-slate-400 text-xs">{item.label}</p>
+                                  <p className="text-white font-bold text-sm mt-0.5">{item.value}</p>
+                                  <p className="text-slate-500 text-xs mt-0.5">{item.sub}</p>
+                                </div>
+                              ))}
+                            </div>
+
+                            {/* 시나리오 비교 */}
+                            <div>
+                              <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide mb-2">📊 시나리오 비교 (클릭수 기준)</p>
+                              <div className="grid grid-cols-3 gap-2">
+                                {scenarios.map(sc => (
+                                  <div key={sc.label} className={`rounded-lg p-3 border text-center ${sc.color}`}>
+                                    <p className="text-white text-xs font-bold">{sc.label}</p>
+                                    <p className="text-slate-400 text-xs mt-0.5">{sc.clicks.toLocaleString()}회</p>
+                                    <p className={`font-bold text-sm mt-1 ${sc.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                      {sc.netProfit >= 0 ? '+' : ''}{sc.netProfit >= 1000000 ? (sc.netProfit/1000000).toFixed(1)+'M' : (sc.netProfit/10000).toFixed(0)+'만'}원
+                                    </p>
+                                    <p className="text-slate-500 text-xs">{sc.roi !== null ? 'ROI '+sc.roi+'%' : '-'}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* 수익 곡선 */}
+                            <div>
+                              <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide mb-2">📈 수량별 순이익 곡선</p>
+                              <ResponsiveContainer width="100%" height={140}>
+                                <LineChart data={curveData}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                                  <XAxis dataKey="qty" tick={{ fill:'#94a3b8', fontSize:10 }} tickFormatter={v=>v+'개'} />
+                                  <YAxis tick={{ fill:'#94a3b8', fontSize:10 }} tickFormatter={v=>v>=1000000?(v/1000000).toFixed(0)+'M':v>=10000?(v/10000).toFixed(0)+'만':v} />
+                                  <Tooltip contentStyle={{ backgroundColor:'#1e293b', border:'1px solid #475569', fontSize:11 }}
+                                    formatter={v=>[won(v),'순이익']} labelFormatter={v=>`판매수량 ${v.toLocaleString()}개`} />
+                                  <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="4 4" />
+                                  <Line type="monotone" dataKey="profit" stroke="#3b82f6" strokeWidth={2} dot={false}
+                                    stroke={(curveData.find(d=>d.qty>=r.qty)?.profit||0) >= 0 ? '#22c55e' : '#ef4444'} />
+                                </LineChart>
+                              </ResponsiveContainer>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  };
+                  return <SimulatorTab />;
+                })()}
+
                 {activeTab === 'bep' && (() => {
                   const bep = calculateBEP(settings);
                   return (
@@ -1963,6 +2244,16 @@ export default function YouTubeAnalyzer() {
                 {activeTab === 'export' && (
                   <div className="bg-slate-800 border border-slate-700 rounded-lg p-6 space-y-4">
                     <h3 className="text-lg font-bold text-white mb-4">📥 데이터 내보내기</h3>
+
+                    {/* PPL 제안서 */}
+                    <div className="bg-gradient-to-br from-blue-900/40 to-indigo-900/40 border border-blue-600/50 rounded-lg p-4 mb-2">
+                      <h4 className="text-white font-bold mb-1">📄 PPL 제안서 생성</h4>
+                      <p className="text-blue-200/70 text-xs mb-3">채널 분석 결과를 인쇄용 제안서로 생성합니다. 새 탭에서 열린 후 🖨️ PDF 저장 버튼을 누르면 PDF로 저장됩니다.</p>
+                      <button onClick={handleGenerateProposal} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg flex items-center justify-center gap-2 transition font-bold text-sm">
+                        📄 PPL 제안서 열기
+                      </button>
+                    </div>
+
                     <button onClick={handleExportExcel} className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg flex items-center justify-center gap-2 transition font-semibold">
                       <Download size={20} /> Excel 다운로드 (상세 분석)
                     </button>
