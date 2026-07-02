@@ -281,24 +281,31 @@ export default function YouTubeAnalyzer() {
   };
 
   const [refreshingAll, setRefreshingAll] = useState(false);
+  const [refreshAllProgress, setRefreshAllProgress] = useState({ current: 0, total: 0, name: '' });
   const handleRefreshAll = async () => {
     if (!window.confirm(`등록된 채널 ${channels.length}개를 모두 갱신합니다. 채널 수에 따라 수 분이 소요될 수 있습니다.`)) return;
     setRefreshingAll(true);
     setError(null);
-    try {
-      const result = await api.post('/channels/refresh-all');
-      const { succeeded, total, results } = result.data;
-      await loadChannels();
-      const failed = results.filter(r => !r.success);
-      if (failed.length > 0) {
-        setError(`✓ ${succeeded}/${total}개 갱신 완료 — 실패: ${failed.map(r => r.name).join(', ')}`);
-      } else {
-        setError(`✓ 전체 ${total}개 채널 갱신 완료`);
+    const total = channels.length;
+    let succeeded = 0;
+    const failed = [];
+    for (let i = 0; i < channels.length; i++) {
+      const ch = channels[i];
+      setRefreshAllProgress({ current: i + 1, total, name: ch.channelName });
+      try {
+        const result = await refreshChannel(ch._id);
+        setChannels(prev => prev.map(c => c._id === ch._id ? result.channel : c));
+        succeeded++;
+      } catch (err) {
+        failed.push(ch.channelName);
       }
-    } catch (err) {
-      setError('전체 갱신 실패: ' + err.message);
-    } finally {
-      setRefreshingAll(false);
+    }
+    setRefreshingAll(false);
+    setRefreshAllProgress({ current: 0, total: 0, name: '' });
+    if (failed.length > 0) {
+      setError(`✓ ${succeeded}/${total}개 갱신 완료 — 실패: ${failed.join(', ')}`);
+    } else {
+      setError(`✓ 전체 ${total}개 채널 갱신 완료`);
     }
   };
 
@@ -904,7 +911,9 @@ export default function YouTubeAnalyzer() {
             </div>
             <div className="flex flex-wrap gap-2 sm:gap-3">
               <button onClick={handleRefreshAll} disabled={refreshingAll || channels.length === 0} className={`flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border ${refreshingAll ? 'bg-cyan-600/20 border-cyan-500 text-cyan-300' : 'bg-transparent border-slate-600 text-slate-300 hover:border-cyan-400 hover:text-cyan-300'} disabled:opacity-40`}>
-                {refreshingAll ? <><Loader size={14} className="animate-spin" /> 갱신 중...</> : <><RefreshCw size={14} /> 전체 갱신</>}
+                {refreshingAll
+                  ? <><Loader size={14} className="animate-spin" /> {refreshAllProgress.current}/{refreshAllProgress.total} 갱신 중</>
+                  : <><RefreshCw size={14} /> 전체 갱신</>}
               </button>
               <button onClick={() => setShowGuide(true)} className="flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border bg-transparent border-slate-600 text-slate-300 hover:border-blue-400 hover:text-blue-300">
                 ❓ 사용 가이드
