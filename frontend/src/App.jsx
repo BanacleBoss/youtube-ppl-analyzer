@@ -2054,8 +2054,7 @@ export default function YouTubeAnalyzer() {
                                   <Tooltip contentStyle={{ backgroundColor:'#1e293b', border:'1px solid #475569', fontSize:11 }}
                                     formatter={v=>[won(v),'순이익']} labelFormatter={v=>`판매수량 ${v.toLocaleString()}개`} />
                                   <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="4 4" />
-                                  <Line type="monotone" dataKey="profit" stroke="#3b82f6" strokeWidth={2} dot={false}
-                                    stroke={(curveData.find(d=>d.qty>=r.qty)?.profit||0) >= 0 ? '#22c55e' : '#ef4444'} />
+                                  <Line type="monotone" dataKey="profit" stroke={r.netProfit >= 0 ? '#22c55e' : '#ef4444'} strokeWidth={2} dot={false} />
                                 </LineChart>
                               </ResponsiveContainer>
                             </div>
