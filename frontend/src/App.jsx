@@ -21,6 +21,19 @@ const InfoTooltip = ({ content, children }) => {
   );
 };
 
+// 조회수/구독자 등 큰 숫자를 K/M 대신 한국식 단위(억/만/천)로 표기
+const formatKoreanCount = (num) => {
+  if (num === null || num === undefined || isNaN(num)) return '-';
+  const n = Number(num);
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  const fmt = (v) => (v % 1 === 0 ? v.toFixed(0) : v.toFixed(1));
+  if (abs >= 100000000) return sign + fmt(abs / 100000000) + '억';
+  if (abs >= 10000) return sign + fmt(abs / 10000) + '만';
+  if (abs >= 1000) return sign + fmt(abs / 1000) + '천';
+  return sign + Math.round(abs).toLocaleString();
+};
+
 export default function YouTubeAnalyzer() {
   const [channels, setChannels] = useState([]);
   const [channelInput, setChannelInput] = useState('');
@@ -434,7 +447,7 @@ export default function YouTubeAnalyzer() {
     const ppl = calculatePPLRevenue(ch.videos);
     const lf = filterVideos(ch.videos, 'longform');
     const assessment = generateChannelAssessment(ch);
-    const subsText = ch.subscribers >= 1000000 ? `${(ch.subscribers/1000000).toFixed(1)}M` : `${(ch.subscribers/1000).toFixed(0)}K`;
+    const subsText = formatKoreanCount(ch.subscribers) + '명';
     const scoreColor = eff.total >= 75 ? '#22c55e' : eff.total >= 50 ? '#eab308' : '#ef4444';
     const grade = eff.total >= 75 ? 'PPL 적합 ✅' : eff.total >= 50 ? '검토 필요 ⚠️' : '비적합 ❌';
 
@@ -482,9 +495,9 @@ export default function YouTubeAnalyzer() {
   <table style="width:100%;border-collapse:collapse;background:#1e293b;border-radius:8px;overflow:hidden;margin-bottom:28px">
     ${rows([
       ['구독자 수', subsText],
-      ['총 조회수', `${(ch.totalViews/100000000).toFixed(1)}억 회`],
+      ['총 조회수', `${formatKoreanCount(ch.totalViews)}회`],
       ['롱폼 영상 수', `${lf.length}개`],
-      ['평균 조회수 (롱폼 10개)', `${(ppl.avgViews/1000).toFixed(1)}K`],
+      ['평균 조회수 (롱폼 10개)', `${formatKoreanCount(ppl.avgViews)}회`],
       ['인게이지먼트율', `${ppl.engagement}%`],
       ['채널 운영 기간', eff.details.channelAgeYears ? `${eff.details.channelAgeYears}년` : '-'],
     ])}
@@ -796,7 +809,7 @@ export default function YouTubeAnalyzer() {
     const sections = [];
 
     // ── 1. 채널 개요 ──
-    const subsText = subs >= 1000000 ? `${(subs/1000000).toFixed(1)}M` : subs >= 10000 ? `${(subs/10000).toFixed(1)}만` : `${(subs/1000).toFixed(0)}K`;
+    const subsText = formatKoreanCount(subs) + '명';
     const ageText = d.channelAgeYears ? `${d.channelAgeYears}년` : '정보 없음';
     const contentFocus = lfRatio >= 60 ? '롱폼 중심 채널' : shorts.length > lf.length + mid.length ? '숏폼 중심 채널' : '혼합형 채널';
     sections.push({
@@ -957,8 +970,8 @@ export default function YouTubeAnalyzer() {
       `## 기본 정보`,
       `| 항목 | 값 |`,
       `|------|-----|`,
-      `| 구독자 | ${(channel.subscribers/10000).toFixed(1)}만 |`,
-      `| 총 조회수 | ${(channel.totalViews/100000000).toFixed(1)}억 |`,
+      `| 구독자 | ${formatKoreanCount(channel.subscribers)}명 |`,
+      `| 총 조회수 | ${formatKoreanCount(channel.totalViews)}회 |`,
       `| 국가 | ${channel.country || '-'} |`,
       `| 롱폼 영상 수 | ${lf.length}개 |`,
       `| 미드폼 영상 수 | ${mid.length}개 |`,
@@ -977,7 +990,7 @@ export default function YouTubeAnalyzer() {
       `## 📈 PPL 분석 (최근 롱폼 10개 기준)`,
       `| 항목 | 값 |`,
       `|------|-----|`,
-      `| 평균 조회수 | ${(ppl.avgViews/1000).toFixed(1)}K |`,
+      `| 평균 조회수 | ${formatKoreanCount(ppl.avgViews)}회 |`,
       `| 인게이지먼트 | ${ppl.engagement}% |`,
       `| CPV (조회수당 비용) | ${ppl.cpv !== null ? ppl.cpv.toLocaleString()+'원' : '미입력'} |`,
       `| CPM (1,000회당) | ${ppl.cpm !== null ? ppl.cpm.toLocaleString()+'원' : '미입력'} |`,
@@ -992,8 +1005,8 @@ export default function YouTubeAnalyzer() {
 
     if (trend) {
       lines.push(``, `## 📊 조회수 트렌드`);
-      lines.push(`- 최근 10개 평균: **${(trend.recentAvg/1000).toFixed(1)}K**`);
-      lines.push(`- 이전 10개 평균: **${trend.prevAvg ? (trend.prevAvg/1000).toFixed(1)+'K' : '-'}**`);
+      lines.push(`- 최근 10개 평균: **${formatKoreanCount(trend.recentAvg)}회**`);
+      lines.push(`- 이전 10개 평균: **${trend.prevAvg ? formatKoreanCount(trend.prevAvg)+'회' : '-'}**`);
       if (trend.change !== null) lines.push(`- 변화율: **${trend.change > 0 ? '+' : ''}${trend.change}%**`);
     }
 
@@ -1204,7 +1217,7 @@ export default function YouTubeAnalyzer() {
                           {ch.country === 'KR' && <span className="text-xs bg-blue-800 text-blue-200 px-2 py-0.5 rounded">🇰🇷 한국</span>}
                         </div>
                         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-400 mb-2">
-                          <span>구독자: <strong className="text-white">{ch.subscribers >= 1000000 ? (ch.subscribers/1000000).toFixed(1)+'M' : (ch.subscribers/1000).toFixed(0)+'K'}</strong></span>
+                          <span>구독자: <strong className="text-white">{formatKoreanCount(ch.subscribers)}명</strong></span>
                           <span>인게이지먼트: <strong className="text-yellow-400">{ch.engagement}%</strong></span>
                           <span>롱폼 비중: <strong className="text-blue-400">{ch.longformRatio}%</strong></span>
                           <span>영상 수: <strong className="text-white">{ch.videoCount?.toLocaleString()}개</strong></span>
@@ -1317,7 +1330,7 @@ export default function YouTubeAnalyzer() {
                           </div>
                           <div className="min-w-0 flex-1">
                             <h3 className="font-semibold text-white truncate leading-tight text-sm">{channel.channelName}</h3>
-                            <p className="text-xs text-slate-400">구독자 {channel.subscribers >= 1000000 ? (channel.subscribers/1000000).toFixed(1)+'M' : (channel.subscribers/1000).toFixed(0)+'K'}</p>
+                            <p className="text-xs text-slate-400">구독자 {formatKoreanCount(channel.subscribers)}명</p>
                           </div>
                           <span className={`flex-shrink-0 text-xs font-bold px-2 py-0.5 rounded-full border ${badgeColor}`}>{eff.total}점</span>
                         </div>
@@ -1386,9 +1399,9 @@ export default function YouTubeAnalyzer() {
                     <p className="text-slate-400 text-sm mb-4">✨ 최근 10개 롱폼(10분↑) 영상 기준 PPL 분석</p>
                     <div className="grid grid-cols-2 gap-4 mb-6">
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">총 조회수</p><p className="text-2xl font-bold text-white mt-1">{(selectedChannel.totalViews / 1000000000).toFixed(1)}B</p></div>
-                      <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">구독자</p><p className="text-2xl font-bold text-white mt-1">{(selectedChannel.subscribers / 1000000).toFixed(1)}M</p></div>
+                      <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">구독자</p><p className="text-2xl font-bold text-white mt-1">{formatKoreanCount(selectedChannel.subscribers)}명</p></div>
                       <div className="bg-slate-700 rounded p-4"><InfoTooltip content="= (좋아요 + 댓글) / 조회수 × 100%"><p className="text-slate-400 text-sm">인게이지먼트</p><p className="text-2xl font-bold text-white mt-1">{pplData.engagement}%</p></InfoTooltip></div>
-                      <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">평균 조회수</p><p className="text-2xl font-bold text-white mt-1">{(pplData.avgViews/1000).toFixed(0)}K</p></div>
+                      <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">평균 조회수</p><p className="text-2xl font-bold text-white mt-1">{formatKoreanCount(pplData.avgViews)}회</p></div>
                     </div>
 
                     {/* 효율 점수 카드 */}
@@ -1481,11 +1494,11 @@ export default function YouTubeAnalyzer() {
                           <div className="grid grid-cols-3 gap-3 mb-4">
                             <div className="bg-slate-800 rounded p-3 text-center">
                               <p className="text-slate-400 text-xs mb-1">최근 10개 평균</p>
-                              <p className="text-xl font-bold text-white">{(trend.recentAvg / 1000).toFixed(1)}K</p>
+                              <p className="text-xl font-bold text-white">{formatKoreanCount(trend.recentAvg)}회</p>
                             </div>
                             <div className="bg-slate-800 rounded p-3 text-center">
                               <p className="text-slate-400 text-xs mb-1">이전 10개 평균</p>
-                              <p className="text-xl font-bold text-slate-300">{trend.prevAvg ? (trend.prevAvg / 1000).toFixed(1) + 'K' : '-'}</p>
+                              <p className="text-xl font-bold text-slate-300">{trend.prevAvg ? formatKoreanCount(trend.prevAvg) + '회' : '-'}</p>
                             </div>
                             <div className={`rounded p-3 text-center border ${trendBg}`}>
                               <p className="text-slate-400 text-xs mb-1">변화율</p>
@@ -1501,10 +1514,10 @@ export default function YouTubeAnalyzer() {
                               <LineChart data={trend.chartData}>
                                 <CartesianGrid strokeDasharray="3 3" stroke="#475569" />
                                 <XAxis dataKey="name" tick={{ fill: '#94a3b8', fontSize: 11 }} label={{ value: '영상 순서 (오래된→최근)', position: 'insideBottom', offset: -2, fill: '#64748b', fontSize: 10 }} />
-                                <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={v => v >= 1000 ? (v/1000).toFixed(0)+'K' : v} />
+                                <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={v => formatKoreanCount(v)} />
                                 <Tooltip
                                   contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', color: '#e2e8f0', fontSize: 12 }}
-                                  formatter={(value) => [(value/1000).toFixed(1) + 'K 조회', '조회수']}
+                                  formatter={(value) => [formatKoreanCount(value) + '회', '조회수']}
                                   labelFormatter={(label, payload) => payload?.[0]?.payload?.title?.slice(0, 30) || `영상 ${label}`}
                                 />
                                 <Line type="monotone" dataKey="views" stroke="#3b82f6" strokeWidth={2} dot={{ fill: '#3b82f6', r: 3 }} activeDot={{ r: 5 }} />
@@ -1537,19 +1550,19 @@ export default function YouTubeAnalyzer() {
                           <div className="grid grid-cols-3 gap-3 mb-4">
                             <div className="bg-slate-800 rounded p-3 text-center">
                               <p className="text-slate-400 text-xs mb-1">첫 기록</p>
-                              <p className="text-lg font-bold text-white">{first >= 1000000 ? (first/1000000).toFixed(1)+'M' : (first/1000).toFixed(0)+'K'}</p>
+                              <p className="text-lg font-bold text-white">{formatKoreanCount(first)}명</p>
                               <p className="text-xs text-slate-500">{stats[0].date}</p>
                             </div>
                             <div className="bg-slate-800 rounded p-3 text-center">
                               <p className="text-slate-400 text-xs mb-1">최근</p>
-                              <p className="text-lg font-bold text-white">{last >= 1000000 ? (last/1000000).toFixed(1)+'M' : (last/1000).toFixed(0)+'K'}</p>
+                              <p className="text-lg font-bold text-white">{formatKoreanCount(last)}명</p>
                               <p className="text-xs text-slate-500">{stats[stats.length-1].date}</p>
                             </div>
                             <div className={`rounded p-3 text-center border ${isUp ? 'bg-green-900/40 border-green-700' : 'bg-red-900/40 border-red-700'}`}>
                               <p className="text-slate-400 text-xs mb-1">증감</p>
                               <p className={`text-lg font-bold flex items-center justify-center gap-1 ${isUp ? 'text-green-400' : 'text-red-400'}`}>
                                 {isUp ? <ArrowUp size={16}/> : <ArrowDown size={16}/>}
-                                {Math.abs(growthAbs) >= 1000 ? (Math.abs(growthAbs)/1000).toFixed(1)+'K' : Math.abs(growthAbs)}
+                                {formatKoreanCount(Math.abs(growthAbs))}명
                               </p>
                               <p className={`text-xs ${isUp ? 'text-green-400' : 'text-red-400'}`}>{isUp ? '+' : ''}{growthPct}%</p>
                             </div>
@@ -1558,9 +1571,9 @@ export default function YouTubeAnalyzer() {
                             <LineChart data={chartData}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#475569" />
                               <XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 11 }} />
-                              <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={v => v >= 1000000 ? (v/1000000).toFixed(1)+'M' : (v/1000).toFixed(0)+'K'} />
+                              <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={v => formatKoreanCount(v)} />
                               <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #475569', color: '#e2e8f0', fontSize: 12 }}
-                                formatter={v => [v >= 1000000 ? (v/1000000).toFixed(2)+'M' : (v/1000).toFixed(1)+'K', '구독자']} />
+                                formatter={v => [formatKoreanCount(v) + '명', '구독자']} />
                               <Line type="monotone" dataKey="subscribers" stroke="#a78bfa" strokeWidth={2} dot={{ fill: '#a78bfa', r: 3 }} activeDot={{ r: 5 }} />
                             </LineChart>
                           </ResponsiveContainer>
@@ -1703,9 +1716,9 @@ export default function YouTubeAnalyzer() {
                                     {video.isAd && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40" title={video.hasPaidPromotion ? 'YouTube 공식 유료 프로모션 표기' : '설명란에서 광고/협찬 문구 감지'}>광고</span>}
                                   </div>
                                 </td>
-                                <td className="text-right p-2 text-white font-semibold">{(video.views/1000).toFixed(0)}K</td>
-                                <td className="text-right p-2 text-blue-400">{(video.likes/1000).toFixed(1)}K</td>
-                                <td className="text-right p-2 text-green-400">{(video.comments/1000).toFixed(1)}K</td>
+                                <td className="text-right p-2 text-white font-semibold">{formatKoreanCount(video.views)}회</td>
+                                <td className="text-right p-2 text-blue-400">{formatKoreanCount(video.likes)}개</td>
+                                <td className="text-right p-2 text-green-400">{formatKoreanCount(video.comments)}개</td>
                                 <td className="text-right p-2 text-yellow-400 font-semibold">{video.engagement}%</td>
                                 <td className="text-right p-2 text-slate-400">{new Date(video.uploadDate).toLocaleDateString('ko-KR')}</td>
                                 <td className="text-center p-2"><a href={`https://www.youtube.com/watch?v=${video.videoId}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition"><ExternalLink size={16} className="inline" /></a></td>
@@ -1746,9 +1759,9 @@ export default function YouTubeAnalyzer() {
                                     {video.isAd && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40">광고</span>}
                                   </div>
                                 </td>
-                                <td className="text-right p-2 text-white font-semibold">{(video.views/1000).toFixed(0)}K</td>
-                                <td className="text-right p-2 text-blue-400">{(video.likes/1000).toFixed(1)}K</td>
-                                <td className="text-right p-2 text-green-400">{(video.comments/1000).toFixed(1)}K</td>
+                                <td className="text-right p-2 text-white font-semibold">{formatKoreanCount(video.views)}회</td>
+                                <td className="text-right p-2 text-blue-400">{formatKoreanCount(video.likes)}개</td>
+                                <td className="text-right p-2 text-green-400">{formatKoreanCount(video.comments)}개</td>
                                 <td className="text-right p-2 text-yellow-400 font-semibold">{video.engagement}%</td>
                                 <td className="text-right p-2 text-slate-400">{new Date(video.uploadDate).toLocaleDateString('ko-KR')}</td>
                                 <td className="text-center p-2"><a href={`https://www.youtube.com/watch?v=${video.videoId}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition"><ExternalLink size={16} className="inline" /></a></td>
@@ -1789,9 +1802,9 @@ export default function YouTubeAnalyzer() {
                                     {video.isAd && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40">광고</span>}
                                   </div>
                                 </td>
-                                <td className="text-right p-2 text-white font-semibold">{(video.views/1000).toFixed(0)}K</td>
-                                <td className="text-right p-2 text-blue-400">{(video.likes/1000).toFixed(1)}K</td>
-                                <td className="text-right p-2 text-green-400">{(video.comments/1000).toFixed(1)}K</td>
+                                <td className="text-right p-2 text-white font-semibold">{formatKoreanCount(video.views)}회</td>
+                                <td className="text-right p-2 text-blue-400">{formatKoreanCount(video.likes)}개</td>
+                                <td className="text-right p-2 text-green-400">{formatKoreanCount(video.comments)}개</td>
                                 <td className="text-right p-2 text-yellow-400 font-semibold">{video.engagement}%</td>
                                 <td className="text-right p-2 text-slate-400">{new Date(video.uploadDate).toLocaleDateString('ko-KR')}</td>
                                 <td className="text-center p-2"><a href={`https://www.youtube.com/watch?v=${video.videoId}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition"><ExternalLink size={16} className="inline" /></a></td>
@@ -2339,8 +2352,8 @@ export default function YouTubeAnalyzer() {
                       ``,
                       `| 항목 | ${metrics.map(m => m.ch.channelName).join(' | ')} |`,
                       `|------|${metrics.map(() => '------').join('|')}|`,
-                      `| 구독자 | ${metrics.map(m => (m.ch.subscribers/10000).toFixed(1)+'만').join(' | ')} |`,
-                      `| 평균 조회수 | ${metrics.map(m => (m.avgViews/1000).toFixed(1)+'K').join(' | ')} |`,
+                      `| 구독자 | ${metrics.map(m => formatKoreanCount(m.ch.subscribers)+'명').join(' | ')} |`,
+                      `| 평균 조회수 | ${metrics.map(m => formatKoreanCount(m.avgViews)+'회').join(' | ')} |`,
                       `| 인게이지먼트 | ${metrics.map(m => m.engagement+'%').join(' | ')} |`,
                       `| 롱폼 수 | ${metrics.map(m => m.lf+'개').join(' | ')} |`,
                       `| 효율 점수 | ${metrics.map(m => m.eff.total+'점').join(' | ')} |`,
@@ -2364,8 +2377,8 @@ export default function YouTubeAnalyzer() {
                           </thead>
                           <tbody>
                             {[
-                              { label: '구독자', getValue: m => `${(m.ch.subscribers/10000).toFixed(1)}만`, best: 'max', getNum: m => m.ch.subscribers },
-                              { label: '평균 조회수', getValue: m => `${(m.avgViews/1000).toFixed(1)}K`, best: 'max', getNum: m => m.avgViews },
+                              { label: '구독자', getValue: m => `${formatKoreanCount(m.ch.subscribers)}명`, best: 'max', getNum: m => m.ch.subscribers },
+                              { label: '평균 조회수', getValue: m => `${formatKoreanCount(m.avgViews)}회`, best: 'max', getNum: m => m.avgViews },
                               { label: '인게이지먼트', getValue: m => `${m.engagement}%`, best: 'max', getNum: m => parseFloat(m.engagement) },
                               { label: '롱폼 수', getValue: m => `${m.lf}개`, best: 'max', getNum: m => m.lf },
                               { label: '⚡ 효율 점수', getValue: m => `${m.eff.total}점`, best: 'max', getNum: m => m.eff.total },
