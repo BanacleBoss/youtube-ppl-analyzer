@@ -612,6 +612,64 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
   }
 });
 
+// POST: 전체 채널 순차 갱신
+app.post('/api/channels/refresh-all', async (req, res) => {
+  console.log('[REFRESH-ALL] 전체 갱신 시작');
+  try {
+    const channels = await Channel.find();
+    if (channels.length === 0) return res.json({ results: [], total: 0 });
+
+    const results = [];
+    for (const channel of channels) {
+      try {
+        const channelInfo = await analyzer.getChannelInfo(channel.channelId);
+        const videos = await analyzer.getChannelVideos(channel.channelId);
+
+        channel.videos = videos;
+        channel.subscribers = channelInfo.subscribers;
+        channel.totalViews = channelInfo.totalViews;
+        channel.channelName = channelInfo.channelName;
+        channel.lastUpdated = new Date();
+
+        const pplData = calculatePPLSummary(videos, channel.pplSettings);
+        const today = new Date().toISOString().split('T')[0];
+        const todayStats = channel.dailyStats.find(d => d.date === today);
+        if (!todayStats) {
+          channel.dailyStats.push({
+            date: today,
+            subscribers: channelInfo.subscribers,
+            engagement: parseFloat(pplData.engagement),
+            avgViews: pplData.avgViews,
+            predictedRevenue: pplData.expectedRevenue,
+            riskLevel: pplData.riskLevel
+          });
+        } else {
+          todayStats.subscribers = channelInfo.subscribers;
+        }
+
+        await channel.save();
+        results.push({ id: channel._id, name: channel.channelName, success: true, totalVideos: videos.length });
+        console.log(`[REFRESH-ALL] ✓ ${channel.channelName} (${videos.length}개)`);
+
+        // 채널 간 3초 딜레이 — YouTube API 쿼터 보호
+        if (channels.indexOf(channel) < channels.length - 1) {
+          await new Promise(res => setTimeout(res, 3000));
+        }
+      } catch (err) {
+        results.push({ id: channel._id, name: channel.channelName, success: false, error: err.message });
+        console.error(`[REFRESH-ALL] ✗ ${channel.channelName}: ${err.message}`);
+      }
+    }
+
+    const succeeded = results.filter(r => r.success).length;
+    console.log(`[REFRESH-ALL] 완료: ${succeeded}/${channels.length} 성공`);
+    res.json({ results, total: channels.length, succeeded });
+  } catch (error) {
+    console.error('[REFRESH-ALL ERROR]', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // POST: PPL 설정 저장
 app.post('/api/channels/:id/settings', async (req, res) => {
   try {

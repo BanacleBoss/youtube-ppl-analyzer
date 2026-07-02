@@ -280,6 +280,28 @@ export default function YouTubeAnalyzer() {
     }
   };
 
+  const [refreshingAll, setRefreshingAll] = useState(false);
+  const handleRefreshAll = async () => {
+    if (!window.confirm(`등록된 채널 ${channels.length}개를 모두 갱신합니다. 채널 수에 따라 수 분이 소요될 수 있습니다.`)) return;
+    setRefreshingAll(true);
+    setError(null);
+    try {
+      const result = await api.post('/channels/refresh-all');
+      const { succeeded, total, results } = result.data;
+      await loadChannels();
+      const failed = results.filter(r => !r.success);
+      if (failed.length > 0) {
+        setError(`✓ ${succeeded}/${total}개 갱신 완료 — 실패: ${failed.map(r => r.name).join(', ')}`);
+      } else {
+        setError(`✓ 전체 ${total}개 채널 갱신 완료`);
+      }
+    } catch (err) {
+      setError('전체 갱신 실패: ' + err.message);
+    } finally {
+      setRefreshingAll(false);
+    }
+  };
+
   const handleDeleteChannel = async (channelId) => {
     if (!window.confirm('이 채널을 삭제하시겠습니까?')) return;
     try {
@@ -881,6 +903,9 @@ export default function YouTubeAnalyzer() {
               <p className="text-slate-500 mt-0.5 text-xs sm:text-sm">{channels.length}개 채널 · Built by <span className="text-slate-400 font-medium">Jay Jeong</span></p>
             </div>
             <div className="flex flex-wrap gap-2 sm:gap-3">
+              <button onClick={handleRefreshAll} disabled={refreshingAll || channels.length === 0} className={`flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border ${refreshingAll ? 'bg-cyan-600/20 border-cyan-500 text-cyan-300' : 'bg-transparent border-slate-600 text-slate-300 hover:border-cyan-400 hover:text-cyan-300'} disabled:opacity-40`}>
+                {refreshingAll ? <><Loader size={14} className="animate-spin" /> 갱신 중...</> : <><RefreshCw size={14} /> 전체 갱신</>}
+              </button>
               <button onClick={() => setShowGuide(true)} className="flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border bg-transparent border-slate-600 text-slate-300 hover:border-blue-400 hover:text-blue-300">
                 ❓ 사용 가이드
               </button>
