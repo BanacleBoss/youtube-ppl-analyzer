@@ -73,7 +73,7 @@ export default function YouTubeAnalyzer() {
     pgFeeRate: 0.0385, totalMG: 3000000, agencyMGShareRate: 0.3,
     rsRate: 0.2, expectedClicks: 500, conversionRate: 0.03,
   });
-  const [simInitialized, setSimInitialized] = React.useState(false);
+
   const [statusFilter, setStatusFilter] = useState('전체');
 
   useEffect(() => { loadChannels(); loadItems(); }, []);
