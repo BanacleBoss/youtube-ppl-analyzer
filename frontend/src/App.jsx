@@ -66,6 +66,14 @@ export default function YouTubeAnalyzer() {
   const [metaForm, setMetaForm] = useState({ status: '미분류', memo: '', channelTags: [] });
   const [metaTagInput, setMetaTagInput] = useState('');
   const [savingMeta, setSavingMeta] = useState(false);
+
+  // 시뮬레이터 state (부모에 유지 → 탭 전환해도 값 보존, 리마운트 없음)
+  const [sim, setSim] = React.useState({
+    productPrice: 89000, cost: 30000, shippingCost: 3500, giftCost: 0,
+    pgFeeRate: 0.0385, totalMG: 3000000, agencyMGShareRate: 0.3,
+    rsRate: 0.2, expectedClicks: 500, conversionRate: 0.03,
+  });
+  const [simInitialized, setSimInitialized] = React.useState(false);
   const [statusFilter, setStatusFilter] = useState('전체');
 
   useEffect(() => { loadChannels(); loadItems(); }, []);
@@ -1898,172 +1906,160 @@ export default function YouTubeAnalyzer() {
                 )}
 
                 {activeTab === 'simulator' && (() => {
-                  // 시뮬레이터 전용 로컬 state — 이 탭이 렌더될 때만 동작
-                  const SimulatorTab = () => {
-                    const [sim, setSim] = React.useState({
-                      productPrice: settings.productPrice || 89000,
-                      cost: settings.cost || 30000,
-                      shippingCost: settings.shippingCost || 3500,
-                      giftCost: settings.giftCost || 0,
-                      pgFeeRate: settings.pgFeeRate || 0.0385,
-                      totalMG: settings.totalMG || 3000000,
-                      agencyMGShareRate: settings.agencyMGShareRate || 0.3,
-                      rsRate: settings.rsRate || 0.2,
-                      expectedClicks: settings.expectedClicks || 500,
-                      conversionRate: settings.expectedConversionRate || 0.03,
-                    });
+                  // 부모 sim/setSim 직접 사용 — 내부 컴포넌트 정의 없음 (리마운트 방지)
+                  const simCalc = (s) => {
+                    const ourMG = s.totalMG * (1 - s.agencyMGShareRate);
+                    const qty = Math.round(s.expectedClicks * s.conversionRate);
+                    const revenue = qty * s.productPrice;
+                    const pgFee = s.productPrice * s.pgFeeRate;
+                    const rsAmount = s.productPrice * s.rsRate;
+                    const unitMargin = s.productPrice - s.cost - s.shippingCost - s.giftCost - pgFee - rsAmount;
+                    const grossProfit = qty * unitMargin;
+                    const netProfit = grossProfit - ourMG;
+                    const roi = ourMG > 0 ? Math.round(netProfit / ourMG * 100) : null;
+                    const roas = ourMG > 0 ? Math.round(revenue / ourMG * 100) : null;
+                    const bepQty = unitMargin > 0 ? Math.ceil(ourMG / unitMargin) : null;
+                    return { ourMG, qty, revenue, unitMargin, grossProfit, netProfit, roi, roas, bepQty };
+                  };
 
-                    const calc = (s) => {
-                      const ourMG = s.totalMG * (1 - s.agencyMGShareRate);
-                      const qty = Math.round(s.expectedClicks * s.conversionRate);
-                      const revenue = qty * s.productPrice;
-                      const pgFee = s.productPrice * s.pgFeeRate;
-                      const rsAmount = s.productPrice * s.rsRate;
-                      const unitMargin = s.productPrice - s.cost - s.shippingCost - s.giftCost - pgFee - rsAmount;
-                      const grossProfit = qty * unitMargin;
-                      const netProfit = grossProfit - ourMG;
-                      const roi = ourMG > 0 ? Math.round(netProfit / ourMG * 100) : null;
-                      const roas = ourMG > 0 ? Math.round(revenue / ourMG * 100) : null;
-                      const bepQty = unitMargin > 0 ? Math.ceil(ourMG / unitMargin) : null;
-                      return { ourMG, qty, revenue, unitMargin, grossProfit, netProfit, roi, roas, bepQty };
-                    };
+                  const r = simCalc(sim);
 
-                    const r = calc(sim);
+                  const simScenarios = [
+                    { label: '😰 비관', clicks: Math.round(sim.expectedClicks * 0.5), color: 'border-red-600 bg-red-900/20' },
+                    { label: '😐 기본', clicks: sim.expectedClicks, color: 'border-yellow-600 bg-yellow-900/20' },
+                    { label: '😊 낙관', clicks: Math.round(sim.expectedClicks * 2), color: 'border-green-600 bg-green-900/20' },
+                  ].map(sc => ({ ...sc, ...simCalc({ ...sim, expectedClicks: sc.clicks }) }));
 
-                    // 시나리오 (클릭수 ×0.5 / ×1 / ×2)
-                    const scenarios = [
-                      { label: '😰 비관', clicks: Math.round(sim.expectedClicks * 0.5), color: 'border-red-600 bg-red-900/20' },
-                      { label: '😐 기본', clicks: sim.expectedClicks, color: 'border-yellow-600 bg-yellow-900/20' },
-                      { label: '😊 낙관', clicks: Math.round(sim.expectedClicks * 2), color: 'border-green-600 bg-green-900/20' },
-                    ].map(sc => ({ ...sc, ...calc({ ...sim, expectedClicks: sc.clicks }) }));
+                  const simCurveData = Array.from({ length: 11 }, (_, i) => {
+                    const qty = Math.round(r.bepQty ? r.bepQty * i * 0.25 : sim.expectedClicks * sim.conversionRate * i * 0.2);
+                    return { qty, profit: qty * r.unitMargin - r.ourMG };
+                  });
 
-                    // 수량-수익 곡선 데이터
-                    const curveData = Array.from({ length: 11 }, (_, i) => {
-                      const qty = Math.round(r.bepQty ? r.bepQty * i * 0.25 : sim.expectedClicks * sim.conversionRate * i * 0.2);
-                      return { qty, profit: qty * r.unitMargin - r.ourMG };
-                    });
+                  const simWon = v => {
+                    const abs = Math.abs(v);
+                    const sign = v < 0 ? '-' : '';
+                    if (abs >= 100000000) return sign + (abs/100000000).toFixed(1).replace(/\.0$/,'') + '억원';
+                    if (abs >= 10000) return sign + (abs/10000).toFixed(1).replace(/\.0$/,'') + '만원';
+                    return sign + abs.toLocaleString() + '원';
+                  };
+                  const simPct = v => (v*100).toFixed(1)+'%';
+                  const simNum = v => v.toLocaleString()+'개';
 
-                    const Slider = ({ label, value, min, max, step, format, onChange }) => (
-                      <div>
-                        <div className="flex justify-between mb-1">
-                          <span className="text-slate-300 text-xs">{label}</span>
-                          <span className="text-white text-xs font-bold">{format(value)}</span>
-                        </div>
-                        <input type="range" min={min} max={max} step={step} value={value}
-                          onChange={e => onChange(Number(e.target.value))}
-                          className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-slate-600 accent-blue-500" />
-                        <div className="flex justify-between text-slate-600 text-xs mt-0.5">
-                          <span>{format(min)}</span><span>{format(max)}</span>
-                        </div>
+                  const SimSlider = ({ label, value, min, max, step, format, onChange }) => (
+                    <div>
+                      <div className="flex justify-between mb-1">
+                        <span className="text-slate-300 text-xs">{label}</span>
+                        <span className="text-white text-xs font-bold">{format(value)}</span>
                       </div>
-                    );
+                      <input type="range" min={min} max={max} step={step} value={value}
+                        onChange={e => onChange(Number(e.target.value))}
+                        className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-slate-600 accent-blue-500" />
+                      <div className="flex justify-between text-slate-600 text-xs mt-0.5">
+                        <span>{format(min)}</span><span>{format(max)}</span>
+                      </div>
+                    </div>
+                  );
 
-                    const won = v => v >= 1000000 ? (v/1000000).toFixed(1)+'M원' : v >= 10000 ? (v/10000).toFixed(0)+'만원' : v.toLocaleString()+'원';
-                    const pct = v => (v*100).toFixed(1)+'%';
-                    const num = v => v.toLocaleString()+'개';
+                  return (
+                    <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+                      <h3 className="text-lg font-bold text-white mb-1">🎛️ PPL 수익 시뮬레이터</h3>
+                      <p className="text-slate-400 text-xs mb-5">슬라이더를 조절하면 손익이 실시간으로 변경됩니다. 설정 탭과 독립적으로 동작합니다.</p>
 
-                    return (
-                      <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
-                        <h3 className="text-lg font-bold text-white mb-1">🎛️ PPL 수익 시뮬레이터</h3>
-                        <p className="text-slate-400 text-xs mb-5">슬라이더를 조절하면 손익이 실시간으로 변경됩니다. 설정 탭과 독립적으로 동작합니다.</p>
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {/* ── 슬라이더 패널 ── */}
+                        <div className="space-y-4">
+                          <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide">📦 상품 조건</p>
+                          <SimSlider label="판매가" value={sim.productPrice} min={10000} max={500000} step={1000} format={simWon} onChange={v => setSim(s=>({...s,productPrice:v}))} />
+                          <SimSlider label="원가" value={sim.cost} min={0} max={300000} step={1000} format={simWon} onChange={v => setSim(s=>({...s,cost:v}))} />
+                          <SimSlider label="배송비 + 사은품" value={sim.shippingCost + sim.giftCost} min={0} max={30000} step={1000} format={simWon} onChange={v => setSim(s=>({...s,shippingCost:v}))} />
 
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                          {/* ── 슬라이더 패널 ── */}
-                          <div className="space-y-4">
-                            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide">📦 상품 조건</p>
-                            <Slider label="판매가" value={sim.productPrice} min={10000} max={500000} step={1000} format={won} onChange={v => setSim(s=>({...s,productPrice:v}))} />
-                            <Slider label="원가" value={sim.cost} min={0} max={300000} step={1000} format={won} onChange={v => setSim(s=>({...s,cost:v}))} />
-                            <Slider label="배송비 + 사은품" value={sim.shippingCost + sim.giftCost} min={0} max={30000} step={500} format={won} onChange={v => setSim(s=>({...s,shippingCost:v}))} />
+                          <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide pt-2">💰 딜 조건</p>
+                          <SimSlider label="총 MG" value={sim.totalMG} min={0} max={20000000} step={10000} format={simWon} onChange={v => setSim(s=>({...s,totalMG:v}))} />
+                          <SimSlider label="대행사 MG 분담률" value={sim.agencyMGShareRate} min={0} max={1} step={0.05} format={simPct} onChange={v => setSim(s=>({...s,agencyMGShareRate:v}))} />
+                          <SimSlider label="RS율 (매출 배분)" value={sim.rsRate} min={0} max={0.5} step={0.01} format={simPct} onChange={v => setSim(s=>({...s,rsRate:v}))} />
 
-                            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide pt-2">💰 딜 조건</p>
-                            <Slider label="총 MG" value={sim.totalMG} min={0} max={20000000} step={100000} format={won} onChange={v => setSim(s=>({...s,totalMG:v}))} />
-                            <Slider label="대행사 MG 분담률" value={sim.agencyMGShareRate} min={0} max={1} step={0.05} format={pct} onChange={v => setSim(s=>({...s,agencyMGShareRate:v}))} />
-                            <Slider label="RS율 (매출 배분)" value={sim.rsRate} min={0} max={0.5} step={0.01} format={pct} onChange={v => setSim(s=>({...s,rsRate:v}))} />
+                          <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide pt-2">🖱️ 전환 조건</p>
+                          <SimSlider label="예상 클릭수" value={sim.expectedClicks} min={0} max={10000} step={50} format={v=>v.toLocaleString()+'회'} onChange={v => setSim(s=>({...s,expectedClicks:v}))} />
+                          <SimSlider label="전환율" value={sim.conversionRate} min={0.001} max={0.2} step={0.001} format={simPct} onChange={v => setSim(s=>({...s,conversionRate:v}))} />
 
-                            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide pt-2">🖱️ 전환 조건</p>
-                            <Slider label="예상 클릭수" value={sim.expectedClicks} min={0} max={10000} step={50} format={v=>v.toLocaleString()+'회'} onChange={v => setSim(s=>({...s,expectedClicks:v}))} />
-                            <Slider label="전환율" value={sim.conversionRate} min={0.001} max={0.2} step={0.001} format={pct} onChange={v => setSim(s=>({...s,conversionRate:v}))} />
+                          <button onClick={() => setSim({
+                            productPrice: settings.productPrice||89000, cost: settings.cost||30000,
+                            shippingCost: settings.shippingCost||3500, giftCost: settings.giftCost||0,
+                            pgFeeRate: settings.pgFeeRate||0.0385, totalMG: settings.totalMG||3000000,
+                            agencyMGShareRate: settings.agencyMGShareRate||0.3, rsRate: settings.rsRate||0.2,
+                            expectedClicks: settings.expectedClicks||500, conversionRate: settings.expectedConversionRate||0.03,
+                          })} className="w-full text-xs text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 py-2 rounded transition">
+                            ↺ 설정값으로 초기화
+                          </button>
+                        </div>
 
-                            <button onClick={() => setSim({
-                              productPrice: settings.productPrice||89000, cost: settings.cost||30000,
-                              shippingCost: settings.shippingCost||3500, giftCost: settings.giftCost||0,
-                              pgFeeRate: settings.pgFeeRate||0.0385, totalMG: settings.totalMG||3000000,
-                              agencyMGShareRate: settings.agencyMGShareRate||0.3, rsRate: settings.rsRate||0.2,
-                              expectedClicks: settings.expectedClicks||500, conversionRate: settings.expectedConversionRate||0.03,
-                            })} className="w-full text-xs text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 py-2 rounded transition">
-                              ↺ 설정값으로 초기화
-                            </button>
+                        {/* ── 결과 패널 ── */}
+                        <div className="space-y-4">
+                          {/* 핵심 지표 */}
+                          <div className={`rounded-xl p-5 border-2 text-center ${r.netProfit >= 0 ? 'bg-green-900/30 border-green-500' : 'bg-red-900/30 border-red-500'}`}>
+                            <p className="text-slate-300 text-sm mb-1">순이익</p>
+                            <p className={`text-4xl font-bold ${r.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                              {r.netProfit >= 0 ? '+' : ''}{simWon(r.netProfit)}
+                            </p>
+                            <div className="flex justify-center gap-4 mt-2 text-xs text-slate-400">
+                              <span>ROI <strong className={r.roi >= 0 ? 'text-green-400' : 'text-red-400'}>{r.roi !== null ? r.roi+'%' : '-'}</strong></span>
+                              <span>ROAS <strong className="text-blue-400">{r.roas !== null ? r.roas+'%' : '-'}</strong></span>
+                            </div>
                           </div>
 
-                          {/* ── 결과 패널 ── */}
-                          <div className="space-y-4">
-                            {/* 핵심 지표 */}
-                            <div className={`rounded-xl p-5 border-2 text-center ${r.netProfit >= 0 ? 'bg-green-900/30 border-green-500' : 'bg-red-900/30 border-red-500'}`}>
-                              <p className="text-slate-300 text-sm mb-1">순이익</p>
-                              <p className={`text-4xl font-bold ${r.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                {r.netProfit >= 0 ? '+' : ''}{won(r.netProfit)}
-                              </p>
-                              <div className="flex justify-center gap-4 mt-2 text-xs text-slate-400">
-                                <span>ROI <strong className={r.roi >= 0 ? 'text-green-400' : 'text-red-400'}>{r.roi !== null ? r.roi+'%' : '-'}</strong></span>
-                                <span>ROAS <strong className="text-blue-400">{r.roas !== null ? r.roas+'%' : '-'}</strong></span>
+                          <div className="grid grid-cols-2 gap-2">
+                            {[
+                              { label:'우리측 MG', value: simWon(r.ourMG), sub:'대행사 제외' },
+                              { label:'개당 기여마진', value: simWon(r.unitMargin), sub: r.unitMargin >= 0 ? '마진 있음 ✓' : '마진 없음 ✗' },
+                              { label:'예상 판매수량', value: simNum(r.qty), sub:`클릭 ${sim.expectedClicks.toLocaleString()}회 × ${simPct(sim.conversionRate)}` },
+                              { label:'예상 매출', value: simWon(r.revenue), sub:'판매수량 × 판매가' },
+                              { label:'BEP 판매수량', value: r.bepQty !== null ? simNum(r.bepQty) : '-', sub: r.bepQty !== null ? (r.qty >= r.bepQty ? '✅ BEP 달성' : '⚠️ BEP 미달') : '-' },
+                              { label:'총 기여이익', value: simWon(r.grossProfit), sub:'판매수량 × 기여마진' },
+                            ].map(item => (
+                              <div key={item.label} className="bg-slate-700/80 rounded-lg p-3">
+                                <p className="text-slate-400 text-xs">{item.label}</p>
+                                <p className="text-white font-bold text-sm mt-0.5">{item.value}</p>
+                                <p className="text-slate-500 text-xs mt-0.5">{item.sub}</p>
                               </div>
-                            </div>
+                            ))}
+                          </div>
 
-                            <div className="grid grid-cols-2 gap-2">
-                              {[
-                                { label:'우리측 MG', value: won(r.ourMG), sub:'대행사 제외' },
-                                { label:'개당 기여마진', value: won(r.unitMargin), sub: r.unitMargin >= 0 ? '마진 있음 ✓' : '마진 없음 ✗' },
-                                { label:'예상 판매수량', value: num(r.qty), sub:`클릭 ${sim.expectedClicks.toLocaleString()}회 × ${pct(sim.conversionRate)}` },
-                                { label:'예상 매출', value: won(r.revenue), sub:'판매수량 × 판매가' },
-                                { label:'BEP 판매수량', value: r.bepQty !== null ? num(r.bepQty) : '-', sub: r.bepQty !== null ? (r.qty >= r.bepQty ? '✅ BEP 달성' : '⚠️ BEP 미달') : '-' },
-                                { label:'총 기여이익', value: won(r.grossProfit), sub:'판매수량 × 기여마진' },
-                              ].map(item => (
-                                <div key={item.label} className="bg-slate-700/80 rounded-lg p-3">
-                                  <p className="text-slate-400 text-xs">{item.label}</p>
-                                  <p className="text-white font-bold text-sm mt-0.5">{item.value}</p>
-                                  <p className="text-slate-500 text-xs mt-0.5">{item.sub}</p>
+                          {/* 시나리오 비교 */}
+                          <div>
+                            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide mb-2">📊 시나리오 비교 (클릭수 기준)</p>
+                            <div className="grid grid-cols-3 gap-2">
+                              {simScenarios.map(sc => (
+                                <div key={sc.label} className={`rounded-lg p-3 border text-center ${sc.color}`}>
+                                  <p className="text-white text-xs font-bold">{sc.label}</p>
+                                  <p className="text-slate-400 text-xs mt-0.5">{sc.clicks.toLocaleString()}회</p>
+                                  <p className={`font-bold text-sm mt-1 ${sc.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                    {sc.netProfit >= 0 ? '+' : ''}{simWon(sc.netProfit)}
+                                  </p>
+                                  <p className="text-slate-500 text-xs">{sc.roi !== null ? 'ROI '+sc.roi+'%' : '-'}</p>
                                 </div>
                               ))}
                             </div>
+                          </div>
 
-                            {/* 시나리오 비교 */}
-                            <div>
-                              <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide mb-2">📊 시나리오 비교 (클릭수 기준)</p>
-                              <div className="grid grid-cols-3 gap-2">
-                                {scenarios.map(sc => (
-                                  <div key={sc.label} className={`rounded-lg p-3 border text-center ${sc.color}`}>
-                                    <p className="text-white text-xs font-bold">{sc.label}</p>
-                                    <p className="text-slate-400 text-xs mt-0.5">{sc.clicks.toLocaleString()}회</p>
-                                    <p className={`font-bold text-sm mt-1 ${sc.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                      {sc.netProfit >= 0 ? '+' : ''}{sc.netProfit >= 1000000 ? (sc.netProfit/1000000).toFixed(1)+'M' : (sc.netProfit/10000).toFixed(0)+'만'}원
-                                    </p>
-                                    <p className="text-slate-500 text-xs">{sc.roi !== null ? 'ROI '+sc.roi+'%' : '-'}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-
-                            {/* 수익 곡선 */}
-                            <div>
-                              <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide mb-2">📈 수량별 순이익 곡선</p>
-                              <ResponsiveContainer width="100%" height={140}>
-                                <LineChart data={curveData}>
-                                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                                  <XAxis dataKey="qty" tick={{ fill:'#94a3b8', fontSize:10 }} tickFormatter={v=>v+'개'} />
-                                  <YAxis tick={{ fill:'#94a3b8', fontSize:10 }} tickFormatter={v=>v>=1000000?(v/1000000).toFixed(0)+'M':v>=10000?(v/10000).toFixed(0)+'만':v} />
-                                  <Tooltip contentStyle={{ backgroundColor:'#1e293b', border:'1px solid #475569', fontSize:11 }}
-                                    formatter={v=>[won(v),'순이익']} labelFormatter={v=>`판매수량 ${v.toLocaleString()}개`} />
-                                  <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="4 4" />
-                                  <Line type="monotone" dataKey="profit" stroke={r.netProfit >= 0 ? '#22c55e' : '#ef4444'} strokeWidth={2} dot={false} />
-                                </LineChart>
-                              </ResponsiveContainer>
-                            </div>
+                          {/* 수익 곡선 */}
+                          <div>
+                            <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide mb-2">📈 수량별 순이익 곡선</p>
+                            <ResponsiveContainer width="100%" height={140}>
+                              <LineChart data={simCurveData}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                                <XAxis dataKey="qty" tick={{ fill:'#94a3b8', fontSize:10 }} tickFormatter={v=>v+'개'} />
+                                <YAxis tick={{ fill:'#94a3b8', fontSize:10 }} tickFormatter={v=>Math.abs(v)>=10000?(v/10000).toFixed(0)+'만':v} />
+                                <Tooltip contentStyle={{ backgroundColor:'#1e293b', border:'1px solid #475569', fontSize:11 }}
+                                  formatter={v=>[simWon(v),'순이익']} labelFormatter={v=>`판매수량 ${v.toLocaleString()}개`} />
+                                <ReferenceLine y={0} stroke="#ef4444" strokeDasharray="4 4" />
+                                <Line type="monotone" dataKey="profit" stroke={r.netProfit >= 0 ? '#22c55e' : '#ef4444'} strokeWidth={2} dot={false} />
+                              </LineChart>
+                            </ResponsiveContainer>
                           </div>
                         </div>
                       </div>
-                    );
-                  };
-                  return <SimulatorTab />;
+                    </div>
+                  );
                 })()}
 
                 {activeTab === 'bep' && (() => {
