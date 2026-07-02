@@ -1398,7 +1398,7 @@ export default function YouTubeAnalyzer() {
                     )}
                     <p className="text-slate-400 text-sm mb-4">✨ 최근 10개 롱폼(10분↑) 영상 기준 PPL 분석</p>
                     <div className="grid grid-cols-2 gap-4 mb-6">
-                      <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">총 조회수</p><p className="text-2xl font-bold text-white mt-1">{(selectedChannel.totalViews / 1000000000).toFixed(1)}B</p></div>
+                      <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">총 조회수</p><p className="text-2xl font-bold text-white mt-1">{formatKoreanCount(selectedChannel.totalViews)}회</p></div>
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">구독자</p><p className="text-2xl font-bold text-white mt-1">{formatKoreanCount(selectedChannel.subscribers)}명</p></div>
                       <div className="bg-slate-700 rounded p-4"><InfoTooltip content="= (좋아요 + 댓글) / 조회수 × 100%"><p className="text-slate-400 text-sm">인게이지먼트</p><p className="text-2xl font-bold text-white mt-1">{pplData.engagement}%</p></InfoTooltip></div>
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">평균 조회수</p><p className="text-2xl font-bold text-white mt-1">{formatKoreanCount(pplData.avgViews)}회</p></div>
