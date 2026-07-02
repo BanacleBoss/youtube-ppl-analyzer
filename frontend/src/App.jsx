@@ -907,7 +907,10 @@ export default function YouTubeAnalyzer() {
           <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
             <div>
               <h1 className="text-xl sm:text-3xl font-bold text-white tracking-tight">📊 YouTube Channel <span className="text-blue-400">Analyzer</span></h1>
-              <p className="text-slate-500 mt-0.5 text-xs sm:text-sm">{channels.length}개 채널 · Built by <span className="text-slate-400 font-medium">Jay Jeong</span></p>
+              <p className="text-slate-500 mt-0.5 text-xs sm:text-sm">
+                {channels.length}개 채널 · Built by <span className="text-slate-400 font-medium">Jay Jeong</span>
+                {process.env.REACT_APP_VERSION && <span className="text-slate-600 ml-2">v{process.env.REACT_APP_VERSION}{process.env.REACT_APP_BUILD_TIME && ` · ${process.env.REACT_APP_BUILD_TIME} 빌드`}</span>}
+              </p>
             </div>
             <div className="flex flex-wrap gap-2 sm:gap-3">
               <button onClick={handleRefreshAll} disabled={refreshingAll || channels.length === 0} className={`flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border ${refreshingAll ? 'bg-cyan-600/20 border-cyan-500 text-cyan-300' : 'bg-transparent border-slate-600 text-slate-300 hover:border-cyan-400 hover:text-cyan-300'} disabled:opacity-40`}>
