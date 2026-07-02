@@ -523,6 +523,11 @@ app.post('/api/channels', async (req, res) => {
   }
 });
 
+// GET: 헬스체크 (UptimeRobot 전용 — DB 조회 없이 즉시 응답)
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, ts: Date.now() });
+});
+
 // GET: 모든 채널 조회
 app.get('/api/channels', async (req, res) => {
   try {
