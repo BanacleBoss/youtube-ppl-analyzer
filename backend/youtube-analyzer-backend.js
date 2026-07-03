@@ -155,6 +155,7 @@ const channelSchema = new mongoose.Schema({
     hasPaidPromotion: { type: Boolean, default: false },  // 유튜브 공식 "유료 프로모션 포함" 표기
     hasSponsorKeyword: { type: Boolean, default: false }, // 설명란 광고/협찬 키워드 감지
     isAd: { type: Boolean, default: false },              // 위 둘 중 하나라도 해당하면 true
+    ourCampaign: { type: Boolean, default: false },       // 우리(제스파)가 실제로 PPL을 집행한 영상인지 수동 표기 — isAd는 자동 감지(타 브랜드 광고 포함)이므로 별도 구분
     collectedAt: { type: Date, default: Date.now }
   }],
   
@@ -171,6 +172,8 @@ const channelSchema = new mongoose.Schema({
     date: { type: String, required: true },        // 집계 기준일 (YYYY-MM-DD)
     actualQty: { type: Number, default: 0 },        // 실제 판매수량
     actualRevenue: { type: Number, default: 0 },    // 실제 매출
+    totalMG: { type: Number, default: 0 },          // 이 캠페인에 실제로 들어간 광고비(MG) — 과거 캠페인마다 금액이 다를 수 있어 직접 입력
+    videoId: { type: String, default: null },       // 이 캠페인이 진행된 영상(ourCampaign으로 표시된 영상 중 선택) — 실측 조회수/CPV 계산에 사용
     expectedQtySnapshot: { type: Number, default: null },   // 기록 당시 예상 판매수량 (비교용 스냅샷)
     expectedClicksSnapshot: { type: Number, default: null }, // 기록 당시 예상 클릭수 (비교용 스냅샷)
     note: { type: String, default: '' },
@@ -320,6 +323,16 @@ function toNonNegativeNumber(value, fallback = 0) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) return fallback;
   return n;
+}
+
+// 채널 갱신 시 영상 목록을 유튜브 API에서 통째로 새로 받아와 교체하는데,
+// 이때 사용자가 수동으로 표시해둔 "우리 캠페인 영상" 체크는 API 응답에 없으므로 유실된다.
+// videoId 기준으로 이전 목록의 값을 새 목록에 옮겨 붙여 보존한다.
+function preserveOurCampaignFlags(oldVideos, newVideos) {
+  if (!oldVideos || oldVideos.length === 0) return newVideos;
+  const flagMap = new Map(oldVideos.filter(v => v.ourCampaign).map(v => [v.videoId, true]));
+  if (flagMap.size === 0) return newVideos;
+  return newVideos.map(v => flagMap.has(v.videoId) ? { ...v, ourCampaign: true } : v);
 }
 
 class YouTubeAnalyzer {
@@ -613,7 +626,7 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
     channel.channelKeywords = channelInfo.channelKeywords;
     channel.videoCount = channelInfo.videoCount;
     // 전체 영상을 최신 데이터로 교체 (전체 페이지네이션으로 가져오므로 누적 불필요)
-    channel.videos = videos;
+    channel.videos = preserveOurCampaignFlags(channel.videos, videos);
     channel.lastUpdated = new Date();
 
     channel.history.push({
@@ -652,7 +665,7 @@ app.post('/api/channels/refresh-all', async (req, res) => {
         const channelInfo = await analyzer.getChannelInfo(channel.channelId);
         const videos = await analyzer.getChannelVideos(channel.channelId);
 
-        channel.videos = videos;
+        channel.videos = preserveOurCampaignFlags(channel.videos, videos);
         channel.subscribers = channelInfo.subscribers;
         channel.totalViews = channelInfo.totalViews;
         channel.channelName = channelInfo.channelName;
@@ -805,7 +818,7 @@ app.post('/api/channels/:id/campaign-logs', async (req, res) => {
       return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
     }
 
-    const { date, actualQty, actualRevenue, note } = req.body;
+    const { date, actualQty, actualRevenue, totalMG, videoId, note } = req.body;
     if (!date) return res.status(400).json({ error: '집계 기준일을 입력하세요' });
 
     // 기록 당시의 예상치를 스냅샷으로 함께 저장해두면 나중에 "예상 대비 실제" 비교가 가능하다.
@@ -815,6 +828,8 @@ app.post('/api/channels/:id/campaign-logs', async (req, res) => {
       date,
       actualQty: toNonNegativeNumber(actualQty, 0),
       actualRevenue: toNonNegativeNumber(actualRevenue, 0),
+      totalMG: toNonNegativeNumber(totalMG, 0),
+      videoId: videoId || null,
       expectedQtySnapshot: pplData.estimatedQty,
       expectedClicksSnapshot: pplData.expectedClicks,
       note: note || ''
@@ -844,6 +859,26 @@ app.delete('/api/channels/:channelId/campaign-logs/:logId', async (req, res) => 
 
     await channel.save();
     res.json(channel);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH: 특정 영상을 "우리 캠페인 영상"으로 수동 표시/해제
+// isAd/hasPaidPromotion은 자동 감지(타 브랜드 광고 포함)라서, 우리가 실제로 집행한 캠페인인지는 별도로 표시해야 한다.
+// 채널 갱신 시 유튜브 API로 영상 목록을 통째로 새로 받아오므로, 이 값은 preserveOurCampaignFlags()로 갱신 후에도 보존된다.
+app.patch('/api/channels/:id/videos/:videoId/campaign-flag', async (req, res) => {
+  try {
+    const { ourCampaign } = req.body || {};
+    const channel = await Channel.findById(req.params.id);
+    if (!channel) return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
+
+    const video = channel.videos.find(v => v.videoId === req.params.videoId);
+    if (!video) return res.status(404).json({ error: '영상을 찾을 수 없습니다' });
+
+    video.ourCampaign = !!ourCampaign;
+    await channel.save();
+    res.json({ videoId: video.videoId, ourCampaign: video.ourCampaign });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1062,7 +1097,8 @@ app.get('/api/channels/:id/export', async (req, res) => {
       { header: '댓글', key: 'comments', width: 12 },
       { header: '인게이지먼트', key: 'engagement', width: 15 },
       { header: '업로드일', key: 'uploadDate', width: 15 },
-      { header: '광고/PPL 여부', key: 'isAd', width: 14 }
+      { header: '광고/PPL 여부', key: 'isAd', width: 14 },
+      { header: '우리 캠페인', key: 'ourCampaign', width: 12 }
     ];
 
     channel.videos.forEach((video, index) => {
@@ -1074,7 +1110,8 @@ app.get('/api/channels/:id/export', async (req, res) => {
         comments: video.comments.toLocaleString(),
         engagement: video.engagement + '%',
         uploadDate: new Date(video.uploadDate).toLocaleDateString('ko-KR'),
-        isAd: video.isAd ? '광고' : ''
+        isAd: video.isAd ? '광고' : '',
+        ourCampaign: video.ourCampaign ? '✓' : ''
       });
     });
 
@@ -1319,7 +1356,7 @@ async function setupScheduling() {
         try {
           const channelInfo = await analyzer.getChannelInfo(channel.channelId);
           const videos = await analyzer.getChannelVideos(channel.channelId);
-          channel.videos = videos;
+          channel.videos = preserveOurCampaignFlags(channel.videos, videos);
           channel.subscribers = channelInfo.subscribers;
           channel.totalViews = channelInfo.totalViews;
           channel.lastUpdated = new Date();

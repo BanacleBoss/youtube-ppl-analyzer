@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle, Package, Pencil, Camera } from 'lucide-react';
 import html2canvas from 'html2canvas';
-import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog, getShareLink, revokeShareLink } from './api';
+import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog, getShareLink, revokeShareLink, setVideoCampaignFlag } from './api';
 
 const InfoTooltip = ({ content, children }) => {
   const [showTooltip, setShowTooltip] = useState(false);
@@ -325,7 +325,7 @@ export default function YouTubeAnalyzer() {
   const [editingItemId, setEditingItemId] = useState(null);
 
   // 캠페인 실적 기록
-  const [campaignLogForm, setCampaignLogForm] = useState({ date: '', actualQty: '', actualRevenue: '', note: '' });
+  const [campaignLogForm, setCampaignLogForm] = useState({ date: '', actualQty: '', actualRevenue: '', totalMG: '', videoId: '', note: '' });
 
   // 채널 메타 (상태/메모/태그)
   const [metaForm, setMetaForm] = useState({ status: '미분류', memo: '', channelTags: [] });
@@ -461,11 +461,13 @@ export default function YouTubeAnalyzer() {
         date: campaignLogForm.date,
         actualQty: Math.max(0, parseInt(campaignLogForm.actualQty) || 0),
         actualRevenue: Math.max(0, parseInt(campaignLogForm.actualRevenue) || 0),
+        totalMG: Math.max(0, parseInt(campaignLogForm.totalMG) || 0),
+        videoId: campaignLogForm.videoId || null,
         note: campaignLogForm.note || ''
       };
       const updated = await addCampaignLog(channelId, payload);
       setChannels(channels.map(ch => ch._id === channelId ? updated : ch));
-      setCampaignLogForm({ date: '', actualQty: '', actualRevenue: '', note: '' });
+      setCampaignLogForm({ date: '', actualQty: '', actualRevenue: '', totalMG: '', videoId: '', note: '' });
       setError('✓ 캠페인 실적이 기록되었습니다');
     } catch (err) {
       setError('캠페인 실적 기록 실패: ' + (err.response?.data?.error || err.message));
@@ -479,6 +481,19 @@ export default function YouTubeAnalyzer() {
       setChannels(channels.map(ch => ch._id === channelId ? updated : ch));
     } catch (err) {
       setError('실적 기록 삭제 실패: ' + (err.response?.data?.error || err.message));
+    }
+  };
+
+  // 영상 목록에서 "우리 캠페인이 실제 진행된 영상" 수동 체크
+  // (isAd는 자동 감지된 "아무 광고/협찬"이고, ourCampaign은 우리가 직접 진행한 캠페인만 표시)
+  const handleToggleOurCampaign = async (channelId, videoId, current) => {
+    try {
+      await setVideoCampaignFlag(channelId, videoId, !current);
+      setChannels(channels.map(ch => ch._id === channelId
+        ? { ...ch, videos: ch.videos.map(v => v.videoId === videoId ? { ...v, ourCampaign: !current } : v) }
+        : ch));
+    } catch (err) {
+      setError('캠페인 영상 표시 실패: ' + (err.response?.data?.error || err.message));
     }
   };
 
@@ -2111,9 +2126,11 @@ export default function YouTubeAnalyzer() {
                               <tr key={video.videoId || idx} className="border-b border-slate-700 hover:bg-slate-700 transition">
                                 <td className="p-2 text-slate-300 max-w-xs">
                                   <div className="flex items-center gap-1.5">
+                                    <input type="checkbox" checked={!!video.ourCampaign} onChange={() => handleToggleOurCampaign(selectedChannel._id, video.videoId, video.ourCampaign)} title="우리 캠페인이 진행된 영상으로 표시" className="shrink-0 w-3.5 h-3.5 accent-purple-500 cursor-pointer" />
                                     <span className="truncate text-slate-400 shrink-0 text-xs w-6">{start+idx+1}.</span>
                                     <span className="truncate">{video.title}</span>
                                     {video.isAd && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40" title={video.hasPaidPromotion ? 'YouTube 공식 유료 프로모션 표기' : '설명란에서 광고/협찬 문구 감지'}>광고</span>}
+                                    {video.ourCampaign && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">우리캠페인</span>}
                                   </div>
                                 </td>
                                 <td className="text-right p-2 text-white font-semibold">{formatKoreanCount(video.views)}회</td>
@@ -2154,9 +2171,11 @@ export default function YouTubeAnalyzer() {
                               <tr key={video.videoId || idx} className="border-b border-slate-700 hover:bg-slate-700 transition">
                                 <td className="p-2 text-slate-300 max-w-xs">
                                   <div className="flex items-center gap-1.5">
+                                    <input type="checkbox" checked={!!video.ourCampaign} onChange={() => handleToggleOurCampaign(selectedChannel._id, video.videoId, video.ourCampaign)} title="우리 캠페인이 진행된 영상으로 표시" className="shrink-0 w-3.5 h-3.5 accent-purple-500 cursor-pointer" />
                                     <span className="truncate text-slate-400 shrink-0 text-xs w-6">{start+idx+1}.</span>
                                     <span className="truncate">{video.title}</span>
                                     {video.isAd && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40">광고</span>}
+                                    {video.ourCampaign && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">우리캠페인</span>}
                                   </div>
                                 </td>
                                 <td className="text-right p-2 text-white font-semibold">{formatKoreanCount(video.views)}회</td>
@@ -2197,9 +2216,11 @@ export default function YouTubeAnalyzer() {
                               <tr key={video.videoId || idx} className="border-b border-slate-700 hover:bg-slate-700 transition">
                                 <td className="p-2 text-slate-300 max-w-xs">
                                   <div className="flex items-center gap-1.5">
+                                    <input type="checkbox" checked={!!video.ourCampaign} onChange={() => handleToggleOurCampaign(selectedChannel._id, video.videoId, video.ourCampaign)} title="우리 캠페인이 진행된 영상으로 표시" className="shrink-0 w-3.5 h-3.5 accent-purple-500 cursor-pointer" />
                                     <span className="truncate text-slate-400 shrink-0 text-xs w-6">{start+idx+1}.</span>
                                     <span className="truncate">{video.title}</span>
                                     {video.isAd && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-400 border border-orange-500/40">광고</span>}
+                                    {video.ourCampaign && <span className="shrink-0 px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">우리캠페인</span>}
                                   </div>
                                 </td>
                                 <td className="text-right p-2 text-white font-semibold">{formatKoreanCount(video.views)}회</td>
@@ -2609,12 +2630,22 @@ export default function YouTubeAnalyzer() {
                         <h3 className="text-lg font-bold text-white mb-1">📋 캠페인 실적 기록</h3>
                         <p className="text-slate-400 text-xs mb-4">캠페인 종료 후 실제 판매수량/매출을 기록해두면, 예상치와 비교해 다음 캠페인의 전환율을 더 정확하게 가늠할 수 있습니다.</p>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-2">
                           <input type="date" value={campaignLogForm.date} onChange={e => setCampaignLogForm({...campaignLogForm, date: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
                           <input type="number" min="0" placeholder="실제 판매수량" value={campaignLogForm.actualQty} onChange={e => setCampaignLogForm({...campaignLogForm, actualQty: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
                           <input type="number" min="0" placeholder="실제 매출(원)" value={campaignLogForm.actualRevenue} onChange={e => setCampaignLogForm({...campaignLogForm, actualRevenue: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
+                          <input type="number" min="0" placeholder="광고비/MG(원)" value={campaignLogForm.totalMG} onChange={e => setCampaignLogForm({...campaignLogForm, totalMG: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                          <select value={campaignLogForm.videoId} onChange={e => setCampaignLogForm({...campaignLogForm, videoId: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500">
+                            <option value="">연결 영상 선택 (선택)</option>
+                            {(selectedChannel.videos || []).filter(v => v.ourCampaign).map(v => (
+                              <option key={v.videoId} value={v.videoId}>{v.title}</option>
+                            ))}
+                          </select>
                           <input type="text" placeholder="메모 (선택)" value={campaignLogForm.note} onChange={e => setCampaignLogForm({...campaignLogForm, note: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
                         </div>
+                        <p className="text-slate-500 text-xs mb-2">연결 영상은 위 영상 목록에서 체크박스로 "우리 캠페인" 표시를 한 영상 중에서 선택할 수 있습니다.</p>
                         <button onClick={() => handleAddCampaignLog(selectedChannel._id)} className="bg-blue-600 hover:bg-blue-700 text-white text-sm px-4 py-2 rounded font-semibold transition mb-4">+ 실적 기록 추가</button>
 
                         {(selectedChannel.campaignLogs && selectedChannel.campaignLogs.length > 0) ? (
@@ -2624,6 +2655,11 @@ export default function YouTubeAnalyzer() {
                                 <th className="text-left p-2">날짜</th>
                                 <th className="text-right p-2">실제 판매수량</th>
                                 <th className="text-right p-2">실제 매출</th>
+                                <th className="text-right p-2">광고비(MG)</th>
+                                <th className="text-left p-2">연결 영상</th>
+                                <th className="text-right p-2">실측 조회수</th>
+                                <th className="text-right p-2">실측 CPV</th>
+                                <th className="text-right p-2">댓글수</th>
                                 <th className="text-right p-2">당시 예상수량</th>
                                 <th className="text-right p-2">실측 전환율</th>
                                 <th className="text-left p-2">메모</th>
@@ -2632,11 +2668,22 @@ export default function YouTubeAnalyzer() {
                               <tbody>
                                 {[...selectedChannel.campaignLogs].sort((a, b) => new Date(b.date) - new Date(a.date)).map(log => {
                                   const measuredRate = log.expectedClicksSnapshot ? (log.actualQty / log.expectedClicksSnapshot * 100) : null;
+                                  const linkedVideo = log.videoId ? (selectedChannel.videos || []).find(v => v.videoId === log.videoId) : null;
+                                  const measuredCPV = (linkedVideo && log.totalMG && linkedVideo.views) ? (log.totalMG / linkedVideo.views) : null;
                                   return (
                                     <tr key={log._id} className="border-b border-slate-700 hover:bg-slate-700 transition">
                                       <td className="p-2 text-slate-300">{log.date}</td>
                                       <td className="text-right p-2 text-white">{log.actualQty?.toLocaleString()}개</td>
                                       <td className="text-right p-2 text-white">{log.actualRevenue?.toLocaleString()}원</td>
+                                      <td className="text-right p-2 text-purple-300">{log.totalMG ? `${log.totalMG.toLocaleString()}원` : '-'}</td>
+                                      <td className="p-2 text-slate-300 max-w-[10rem] truncate">
+                                        {linkedVideo ? (
+                                          <a href={`https://www.youtube.com/watch?v=${linkedVideo.videoId}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 truncate" title={linkedVideo.title}>{linkedVideo.title}</a>
+                                        ) : '-'}
+                                      </td>
+                                      <td className="text-right p-2 text-slate-300">{linkedVideo ? `${formatKoreanCount(linkedVideo.views)}회` : '-'}</td>
+                                      <td className="text-right p-2 text-yellow-400">{measuredCPV !== null ? `${Math.round(measuredCPV).toLocaleString()}원` : '-'}</td>
+                                      <td className="text-right p-2 text-green-400">{linkedVideo ? `${formatKoreanCount(linkedVideo.comments)}개` : '-'}</td>
                                       <td className="text-right p-2 text-slate-400">{log.expectedQtySnapshot !== null && log.expectedQtySnapshot !== undefined ? `${log.expectedQtySnapshot.toLocaleString()}개` : '-'}</td>
                                       <td className="text-right p-2 text-blue-400">{measuredRate !== null ? `${measuredRate.toFixed(2)}%` : '-'}</td>
                                       <td className="p-2 text-slate-400">{log.note}</td>

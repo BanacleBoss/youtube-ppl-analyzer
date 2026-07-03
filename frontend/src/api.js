@@ -69,6 +69,12 @@ export const deleteCampaignLog = async (channelId, logId) => {
   return response.data;
 };
 
+// 영상별 "우리 캠페인 진행" 수동 체크
+export const setVideoCampaignFlag = async (channelId, videoId, ourCampaign) => {
+  const response = await api.patch(`/channels/${channelId}/videos/${videoId}/campaign-flag`, { ourCampaign });
+  return response.data;
+};
+
 // 요약 탭 공유 링크
 export const getShareLink = async (channelId, type) => {
   const response = await api.post(`/channels/${channelId}/share`, { type });
