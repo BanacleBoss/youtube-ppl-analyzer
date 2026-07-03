@@ -103,7 +103,21 @@ const channelSchema = new mongoose.Schema({
     agencyMGShareRate: { type: Number, default: 0.3 }, // 대행사(쇼크) MG 분담 비율
     rsRate: { type: Number, default: 0.2 }            // 대행사에 지급하는 RS(매출 성과 배분) 비율
   },
-  
+
+  // 딜 조건 변경 이력 — 설정 저장 시 값이 바뀌면 "변경 전" 값을 스냅샷으로 남긴다.
+  // 협상 과정에서 MG/RS/단가가 어떻게 바뀌어왔는지 추적하기 위한 용도 (현재값은 pplSettings, 과거값은 여기 누적)
+  pplSettingsHistory: [{
+    changedAt: { type: Date, default: Date.now },
+    productPrice: Number,
+    cost: Number,
+    shippingCost: Number,
+    giftCost: Number,
+    pgFeeRate: Number,
+    totalMG: Number,
+    agencyMGShareRate: Number,
+    rsRate: Number
+  }],
+
   // 채널 관리 메타
   status: { type: String, enum: ['관심', '협의중', '완료', '보류', '미분류'], default: '미분류' },
   memo: { type: String, default: '' },
@@ -691,7 +705,7 @@ app.post('/api/channels/:id/settings', async (req, res) => {
       return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
     }
 
-    channel.pplSettings = {
+    const nextSettings = {
       productPrice: toNonNegativeNumber(req.body.productPrice, 50000),
       expectedClicks: toNonNegativeNumber(req.body.expectedClicks, 0),
       expectedConversionRate: toNonNegativeNumber(req.body.expectedConversionRate, 0.03),
@@ -707,6 +721,27 @@ app.post('/api/channels/:id/settings', async (req, res) => {
       agencyMGShareRate: toNonNegativeNumber(req.body.agencyMGShareRate, 0.3),
       rsRate: toNonNegativeNumber(req.body.rsRate, 0.2)
     };
+
+    // 딜 조건(가격/원가/MG/RS 등)이 실제로 바뀌었으면, 바뀌기 전 값을 이력에 스냅샷으로 남긴다.
+    const DEAL_FIELDS = ['productPrice', 'cost', 'shippingCost', 'giftCost', 'pgFeeRate', 'totalMG', 'agencyMGShareRate', 'rsRate'];
+    const prev = channel.pplSettings || {};
+    const dealChanged = DEAL_FIELDS.some(f => Number(prev[f] || 0) !== Number(nextSettings[f] || 0));
+    if (dealChanged) {
+      if (!channel.pplSettingsHistory) channel.pplSettingsHistory = [];
+      channel.pplSettingsHistory.push({
+        changedAt: new Date(),
+        productPrice: prev.productPrice,
+        cost: prev.cost,
+        shippingCost: prev.shippingCost,
+        giftCost: prev.giftCost,
+        pgFeeRate: prev.pgFeeRate,
+        totalMG: prev.totalMG,
+        agencyMGShareRate: prev.agencyMGShareRate,
+        rsRate: prev.rsRate
+      });
+    }
+
+    channel.pplSettings = nextSettings;
 
     // 새로운 설정으로 PPL 계산 업데이트
     const pplData = calculatePPLSummary(channel.videos, channel.pplSettings);

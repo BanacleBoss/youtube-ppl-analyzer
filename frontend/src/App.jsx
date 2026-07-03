@@ -22,6 +22,59 @@ const InfoTooltip = ({ content, children }) => {
   );
 };
 
+// 시뮬레이터용 드래그 스크러버 — 값 라벨이나 트랙 어디든 좌우로 자유롭게 드래그하면
+// 상대 이동량(movementX)만큼 값이 부드럽게 바뀐다. 트랙 위 정확한 지점을 클릭할 필요가 없어
+// 네이티브 range 슬라이더보다 자연스럽게 느껴진다.
+// 모듈 레벨에 둔 이유: 컴포넌트 내부(렌더 함수 안)에 정의하면 부모가 리렌더될 때마다
+// 매번 새로운 함수 정체성이 생겨 React가 기존 인스턴스를 언마운트/재마운트하게 되고,
+// 그 과정에서 내부 useRef(드래그 상태)가 초기화되어 드래그 도중 값 변경이 멈추는 버그가 생긴다.
+const SimSlider = ({ label, value, min, max, step, format, onChange }) => {
+  const draggingRef = useRef(false);
+
+  const handlePointerDown = (e) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const handlePointerMove = (e) => {
+    if (!draggingRef.current) return;
+    const range = max - min;
+    const delta = (e.movementX / 260) * range; // 드래그 1px당 체감 변화량
+    let next = value + delta;
+    next = Math.round(next / step) * step;
+    next = Math.min(max, Math.max(min, next));
+    if (next !== value) onChange(next);
+  };
+  const handlePointerUp = (e) => {
+    draggingRef.current = false;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (_) { /* noop */ }
+  };
+  const pct = Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100));
+
+  return (
+    <div>
+      <div className="flex justify-between mb-1">
+        <span className="text-slate-300 text-xs">{label}</span>
+        <span
+          onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
+          className="text-white text-xs font-bold bg-slate-700 hover:bg-slate-600 active:bg-blue-700 px-2 py-0.5 rounded cursor-ew-resize select-none touch-none"
+          title="좌우로 드래그해서 값 변경">
+          {format(value)}
+        </span>
+      </div>
+      <div
+        onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
+        className="relative w-full h-2.5 rounded-full bg-slate-600 cursor-ew-resize touch-none">
+        <div className="absolute top-0 left-0 h-2.5 rounded-full bg-blue-500 pointer-events-none" style={{ width: `${pct}%` }} />
+        <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white shadow pointer-events-none" style={{ left: `calc(${pct}% - 6px)` }} />
+      </div>
+      <div className="flex justify-between text-slate-600 text-xs mt-0.5">
+        <span>{format(min)}</span><span>{format(max)}</span>
+      </div>
+    </div>
+  );
+};
+
 // 조회수/구독자 등 큰 숫자를 K/M 대신 한국식 단위(억/만/천)로 표기
 export const formatKoreanCount = (num) => {
   if (num === null || num === undefined || isNaN(num)) return '-';
@@ -2339,21 +2392,6 @@ export default function YouTubeAnalyzer() {
                     ? validLogs.reduce((s, l) => s + (l.actualQty / l.expectedClicksSnapshot), 0) / validLogs.length
                     : null;
 
-                  const SimSlider = ({ label, value, min, max, step, format, onChange }) => (
-                    <div>
-                      <div className="flex justify-between mb-1">
-                        <span className="text-slate-300 text-xs">{label}</span>
-                        <span className="text-white text-xs font-bold">{format(value)}</span>
-                      </div>
-                      <input type="range" min={min} max={max} step={step} value={value}
-                        onChange={e => onChange(Number(e.target.value))}
-                        className="w-full h-1.5 rounded-full appearance-none cursor-pointer bg-slate-600 accent-blue-500" />
-                      <div className="flex justify-between text-slate-600 text-xs mt-0.5">
-                        <span>{format(min)}</span><span>{format(max)}</span>
-                      </div>
-                    </div>
-                  );
-
                   return (
                     <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
                       <h3 className="text-lg font-bold text-white mb-1">🎛️ PPL 수익 시뮬레이터</h3>
@@ -2521,6 +2559,38 @@ export default function YouTubeAnalyzer() {
                           </div>
                         )}
                       </div>
+
+                      {selectedChannel.pplSettingsHistory?.length > 0 && (
+                        <div className="mt-6 pt-6 border-t border-slate-700">
+                          <h3 className="text-lg font-bold text-white mb-1">🕘 딜 조건 변경 이력</h3>
+                          <p className="text-slate-400 text-xs mb-4">설정을 저장할 때 판매가·원가·MG·RS 등이 바뀌면 이전 조건이 자동으로 기록됩니다. 협상 과정을 추적하는 용도입니다.</p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                              <thead className="border-b border-slate-600"><tr className="text-slate-400 text-xs">
+                                <th className="text-left p-2">변경일</th>
+                                <th className="text-right p-2">판매가</th>
+                                <th className="text-right p-2">원가</th>
+                                <th className="text-right p-2">총 MG</th>
+                                <th className="text-right p-2">대행사 분담률</th>
+                                <th className="text-right p-2">RS율</th>
+                              </tr></thead>
+                              <tbody>
+                                {[...selectedChannel.pplSettingsHistory].sort((a, b) => new Date(b.changedAt) - new Date(a.changedAt)).map((h, i) => (
+                                  <tr key={h._id || i} className="border-t border-slate-700 hover:bg-slate-700/40">
+                                    <td className="p-2 text-slate-300 whitespace-nowrap">{new Date(h.changedAt).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
+                                    <td className="text-right p-2 text-white">{(h.productPrice || 0).toLocaleString()}원</td>
+                                    <td className="text-right p-2 text-white">{(h.cost || 0).toLocaleString()}원</td>
+                                    <td className="text-right p-2 text-white">{(h.totalMG || 0).toLocaleString()}원</td>
+                                    <td className="text-right p-2 text-slate-300">{((h.agencyMGShareRate || 0) * 100).toFixed(0)}%</td>
+                                    <td className="text-right p-2 text-slate-300">{((h.rsRate || 0) * 100).toFixed(0)}%</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <p className="text-slate-500 text-xs mt-2">현재 적용 중인 값은 위 손익/BEP 계산에 반영된 최신값이며, 이 표는 그 이전 조건들입니다.</p>
+                        </div>
+                      )}
 
                       <div className="mt-6 pt-6 border-t border-slate-700">
                         <h3 className="text-lg font-bold text-white mb-1">📋 캠페인 실적 기록</h3>
