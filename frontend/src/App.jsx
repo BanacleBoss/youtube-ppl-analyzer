@@ -57,6 +57,7 @@ export default function YouTubeAnalyzer() {
   const [showGuide, setShowGuide] = useState(false);
   const [channelSearch, setChannelSearch] = useState('');
   const [channelSortBy, setChannelSortBy] = useState('name'); // name | score | subscribers
+  const [portfolioSortBy, setPortfolioSortBy] = useState('score'); // score | subscribers | avgViews | updated
   const [discoverKeyword, setDiscoverKeyword] = useState('안마기 리뷰');
   const [discoverResults, setDiscoverResults] = useState([]);
   const [discovering, setDiscovering] = useState(false);
@@ -574,6 +575,44 @@ export default function YouTubeAnalyzer() {
       console.error('Excel export error:', err);
       setError('Excel 다운로드 실패: ' + msg);
     }
+  };
+
+  // 전체 채널 데이터를 JSON 파일로 한 번에 백업 (개별 채널 Excel 내보내기와 별개로, 복구용 원본 데이터 보존 목적)
+  const handleBackupAll = () => {
+    const backup = { exportedAt: new Date().toISOString(), version: process.env.REACT_APP_VERSION || null, channels, items };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `채널백업_전체_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
+
+  // 전체 채널 요약을 CSV로 내보내기 (엑셀에서 바로 열람 가능, 포트폴리오 대시보드와 동일한 지표)
+  const handleExportPortfolioCSV = () => {
+    const header = ['채널명', '상태', '효율점수', '구독자', '평균조회수', 'BEP상태', '최근갱신', '태그'];
+    const rows = channels.map(ch => {
+      const eff = calculateEfficiencyScore(ch);
+      const lf = filterVideos(ch.videos, 'longform');
+      const recent = [...lf].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate)).slice(0, 10);
+      const avgViews = recent.length > 0 ? Math.round(recent.reduce((s, v) => s + (v.views || 0), 0) / recent.length) : 0;
+      const s = ch.pplSettings || {};
+      const hasDeal = (s.totalMG || 0) > 0;
+      const bep = hasDeal ? calculateBEP(s) : null;
+      const estimatedQty = hasDeal ? Math.round((Number(s.expectedClicks) || 0) * (Number(s.expectedConversionRate) || 0)) : 0;
+      let bepStatus = '미설정';
+      if (hasDeal && bep) bepStatus = bep.bepQty === null ? '마진없음' : estimatedQty >= bep.bepQty ? '달성' : '미달';
+      return [ch.channelName, ch.status || '미분류', eff.total, ch.subscribers || 0, avgViews, bepStatus, ch.lastUpdated ? new Date(ch.lastUpdated).toLocaleDateString('ko-KR') : '', (ch.channelTags || []).join('/')];
+    });
+    const csvLines = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob(['﻿' + csvLines], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `채널포트폴리오_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    window.URL.revokeObjectURL(url);
   };
 
   const filterVideos = (videos, type) => {
@@ -2407,6 +2446,98 @@ export default function YouTubeAnalyzer() {
                     </div>
                   );
                 })()}
+              </div>
+            )}
+
+            {!selectedChannel && (
+              <div className="lg:col-span-2 space-y-4">
+                <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+                  <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
+                    <h2 className="text-xl font-bold text-white">📊 채널 포트폴리오</h2>
+                    <div className="flex items-center gap-2">
+                      <button onClick={handleExportPortfolioCSV} className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded transition flex items-center gap-1">
+                        <Download size={12} /> 요약 CSV
+                      </button>
+                      <button onClick={handleBackupAll} className="text-xs bg-blue-700 hover:bg-blue-600 text-white px-3 py-1.5 rounded transition flex items-center gap-1">
+                        <Download size={12} /> 전체 백업(JSON)
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-slate-400 text-sm mb-4">전체 채널을 한눈에 비교하세요. 열 제목을 클릭하면 정렬되고, 행을 클릭하면 해당 채널로 이동합니다. 채널 {channels.length}개 · 좌측 검색/상태 필터가 표에도 함께 적용됩니다.</p>
+                  {(() => {
+                    let list = [...channels];
+                    if (channelSearch.trim()) list = list.filter(ch => ch.channelName?.toLowerCase().includes(channelSearch.toLowerCase()));
+                    if (statusFilter !== '전체') list = list.filter(ch => (ch.status || '미분류') === statusFilter);
+
+                    const rows = list.map(ch => {
+                      const eff = calculateEfficiencyScore(ch);
+                      const lf = filterVideos(ch.videos, 'longform');
+                      const recent = [...lf].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate)).slice(0, 10);
+                      const avgViews = recent.length > 0 ? Math.round(recent.reduce((s, v) => s + (v.views || 0), 0) / recent.length) : 0;
+                      const s = ch.pplSettings || {};
+                      const hasDeal = (s.totalMG || 0) > 0;
+                      const bep = hasDeal ? calculateBEP(s) : null;
+                      const estimatedQty = hasDeal ? Math.round((Number(s.expectedClicks) || 0) * (Number(s.expectedConversionRate) || 0)) : 0;
+                      let bepStatus = '미설정';
+                      if (hasDeal && bep) {
+                        bepStatus = bep.bepQty === null ? '마진없음' : estimatedQty >= bep.bepQty ? '달성' : '미달';
+                      }
+                      return { ch, eff, avgViews, bepStatus };
+                    });
+
+                    if (portfolioSortBy === 'score') rows.sort((a, b) => b.eff.total - a.eff.total);
+                    else if (portfolioSortBy === 'subscribers') rows.sort((a, b) => (b.ch.subscribers || 0) - (a.ch.subscribers || 0));
+                    else if (portfolioSortBy === 'avgViews') rows.sort((a, b) => b.avgViews - a.avgViews);
+                    else if (portfolioSortBy === 'updated') rows.sort((a, b) => new Date(b.ch.lastUpdated || 0) - new Date(a.ch.lastUpdated || 0));
+
+                    if (rows.length === 0) return <p className="text-slate-500 text-sm text-center py-8">조건에 맞는 채널이 없습니다</p>;
+
+                    const statusStyle = { '관심': 'bg-blue-500/20 text-blue-400 border-blue-500/40', '협의중': 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', '완료': 'bg-green-500/20 text-green-400 border-green-500/40', '보류': 'bg-red-500/20 text-red-400 border-red-500/40', '미분류': 'bg-slate-500/20 text-slate-400 border-slate-500/40' };
+                    const bepColor = { '달성': 'text-green-400', '미달': 'text-red-400', '마진없음': 'text-red-400', '미설정': 'text-slate-500' };
+                    const sortableTh = (key, label) => (
+                      <th className="text-right p-2 cursor-pointer select-none hover:text-white" onClick={() => setPortfolioSortBy(key)}>
+                        {label}{portfolioSortBy === key ? ' ▼' : ''}
+                      </th>
+                    );
+
+                    return (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="border-b border-slate-600">
+                            <tr className="text-slate-400 text-xs">
+                              <th className="text-left p-2">채널</th>
+                              <th className="text-left p-2">상태</th>
+                              {sortableTh('score', '효율점수')}
+                              {sortableTh('subscribers', '구독자')}
+                              {sortableTh('avgViews', '평균 조회수')}
+                              <th className="text-center p-2">BEP</th>
+                              {sortableTh('updated', '최근 갱신')}
+                              <th className="text-left p-2">태그</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map(({ ch, eff, avgViews, bepStatus }) => {
+                              const st = ch.status || '미분류';
+                              const scoreColor = eff.total >= 75 ? 'text-green-400' : eff.total >= 50 ? 'text-yellow-400' : 'text-red-400';
+                              return (
+                                <tr key={ch._id} onClick={() => setSelectedChannelId(ch._id)} className="border-t border-slate-700 hover:bg-slate-700/50 cursor-pointer transition">
+                                  <td className="p-2 text-white font-medium whitespace-nowrap">{ch.channelName}</td>
+                                  <td className="p-2"><span className={`text-xs px-2 py-0.5 rounded-full border ${statusStyle[st]}`}>{st}</span></td>
+                                  <td className={`text-right p-2 font-bold ${scoreColor}`}>{eff.total}점</td>
+                                  <td className="text-right p-2 text-slate-300">{formatKoreanCount(ch.subscribers)}명</td>
+                                  <td className="text-right p-2 text-slate-300">{formatKoreanCount(avgViews)}회</td>
+                                  <td className={`text-center p-2 font-semibold ${bepColor[bepStatus]}`}>{bepStatus}</td>
+                                  <td className="text-right p-2 text-slate-500 text-xs whitespace-nowrap">{ch.lastUpdated ? new Date(ch.lastUpdated).toLocaleDateString('ko-KR') : '-'}</td>
+                                  <td className="p-2 text-slate-400 text-xs">{(ch.channelTags || []).join(', ') || '-'}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
             )}
           </div>
