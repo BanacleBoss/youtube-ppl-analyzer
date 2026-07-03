@@ -2537,6 +2537,19 @@ export default function YouTubeAnalyzer() {
                         </div>
                       </div>
 
+                      {selectedChannel.pplSettingsHistory?.length > 0 && (() => {
+                        const cumulativeTotalMG = selectedChannel.pplSettingsHistory.reduce((s, h) => s + (h.totalMG || 0), 0) + (settings.totalMG || 0);
+                        return (
+                          <div className="bg-purple-900/30 border border-purple-600/40 rounded-lg p-4 mb-4">
+                            <InfoTooltip content="과거 딜 조건 변경 이력에 기록된 총 MG와 현재 설정된 총 MG를 모두 합한 값입니다. 이 채널에 지금까지 투입된 PPL 비용 총액을 참고하는 용도이며, 손익/BEP·요약·시뮬레이터 계산에는 영향을 주지 않습니다(계산은 항상 최신 설정값 기준).">
+                              <p className="text-purple-300 text-xs uppercase tracking-wide mb-1">📊 누적 PPL 비용 (과거+현재 총합)</p>
+                            </InfoTooltip>
+                            <p className="text-2xl font-bold text-purple-200">{cumulativeTotalMG.toLocaleString()}원</p>
+                            <p className="text-purple-400/70 text-xs mt-1">아래 손익/BEP·요약·시뮬레이터 계산에는 현재 값({(settings.totalMG || 0).toLocaleString()}원)만 사용됩니다.</p>
+                          </div>
+                        );
+                      })()}
+
                       <div className="bg-gradient-to-br from-blue-900 to-blue-800 border border-blue-600 rounded-lg p-6">
                         <h3 className="text-xl font-bold text-white mb-4">📉 손익분기점(BEP)</h3>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
