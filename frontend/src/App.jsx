@@ -328,6 +328,8 @@ export default function YouTubeAnalyzer() {
   const [campaignLogForm, setCampaignLogForm] = useState({ date: '', actualQty: '', actualRevenue: '', totalMG: '', videoId: '', note: '' });
   const [editingHistoryId, setEditingHistoryId] = useState(null);
   const [historyEditForm, setHistoryEditForm] = useState({ productPrice: '', cost: '', totalMG: '', agencyMGShareRate: '', rsRate: '' });
+  const [proposalEmailForm, setProposalEmailForm] = useState({ brandName: '제스파', senderName: '', pplType: '브랜디드 PPL', productName: '' });
+  const [proposalEmailText, setProposalEmailText] = useState('');
 
   // 채널 메타 (상태/메모/태그)
   const [metaForm, setMetaForm] = useState({ status: '미분류', memo: '', channelTags: [] });
@@ -862,6 +864,64 @@ export default function YouTubeAnalyzer() {
     const win = window.open(url, '_blank');
     if (win) win.focus();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
+  };
+
+  // 브랜디드 PPL/기획 PPL/공동구매/협업 제안 메일 초안 생성
+  // — PPL 제안서(PDF)는 데이터 위주의 문서이고, 이건 담당자에게 그대로 붙여넣을 수 있는 메일 본문(대화체)이다.
+  // 채널 종합 총평에서 이미 만들어둔 문장들을 재활용해 "왜 이 채널을 골랐는지"를 근거 있게 채워 넣는다.
+  const buildProposalEmailDraft = (channel, form) => {
+    const ppl = calculatePPLRevenue(channel.videos);
+    const assessment = generateChannelAssessment(channel);
+    const findSection = (keyword) => assessment.find(s => s.title.includes(keyword))?.body || '';
+
+    const brand = form.brandName?.trim() || '[브랜드명]';
+    const sender = form.senderName?.trim() || '[담당자명]';
+    const pplType = form.pplType || '브랜디드 PPL';
+    const productLabel = form.productName?.trim() || '[제품/서비스명]';
+    const subsText = formatKoreanCount(channel.subscribers) + '명';
+
+    const reasons = [findSection('시청자 반응'), findSection('PPL 친화도'), findSection('제품 핏'), findSection('댓글 품질')].filter(Boolean);
+    const hasEstimate = ppl.estimatedQty > 0 && ppl.expectedRevenue > 0;
+
+    const lines = [];
+    lines.push(`제목: [${brand}] ${productLabel} ${pplType} 제안 드립니다 – ${channel.channelName}님`);
+    lines.push('');
+    lines.push(`안녕하세요, ${brand} ${sender}입니다.`);
+    lines.push('');
+    lines.push(`${channel.channelName} 채널을 즐겨 보다가, 구독자 ${subsText} 규모와 채널 색깔이 저희 ${productLabel}와 잘 맞을 것 같아 이렇게 연락드리게 되었습니다.`);
+    lines.push('');
+    lines.push(`이번에 ${pplType} 형태로 협업을 제안드리고 싶습니다. [여기에 제품/캠페인 소개를 2~3문장으로 넣어주세요]`);
+    lines.push('');
+    if (reasons.length > 0) {
+      lines.push(`${channel.channelName} 채널에 제안드리는 이유는 다음과 같습니다.`);
+      reasons.forEach(r => lines.push(`- ${r}`));
+      lines.push('');
+    }
+    lines.push('협업 조건은 아래와 같이 제안드리며, 세부 사항은 편하신 방향으로 조율 가능합니다.');
+    lines.push(`- 제안 형태: ${pplType}`);
+    if (hasEstimate) {
+      lines.push(`- 저희 쪽 자체 추정 기준 예상 판매수량 ${ppl.estimatedQty.toLocaleString()}개, 예상 매출 ${ppl.expectedRevenue.toLocaleString()}원입니다 (실제 성과는 캠페인 진행 방식에 따라 달라질 수 있습니다)`);
+    }
+    lines.push('- MG/RS 등 구체적인 조건은 회신 주시면 상세히 안내드리겠습니다');
+    lines.push('');
+    lines.push('관심 있으시면 편하신 시간에 회신 부탁드립니다. 통화나 미팅으로 자세한 내용 안내드리겠습니다.');
+    lines.push('');
+    lines.push('감사합니다.');
+    lines.push('');
+    lines.push(`${sender} 드림`);
+    lines.push(brand);
+
+    return lines.join('\n');
+  };
+
+  const handleGenerateProposalEmail = () => {
+    if (!selectedChannel) return;
+    setProposalEmailText(buildProposalEmailDraft(selectedChannel, proposalEmailForm));
+  };
+
+  const handleCopyProposalEmail = () => {
+    if (!proposalEmailText) return;
+    navigator.clipboard.writeText(proposalEmailText).then(() => setError('✓ 메일 초안이 클립보드에 복사되었습니다'));
   };
 
   const handleExportExcel = async () => {
@@ -2850,6 +2910,35 @@ export default function YouTubeAnalyzer() {
                       <button onClick={handleGenerateProposal} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg flex items-center justify-center gap-2 transition font-bold text-sm">
                         📄 PPL 제안서 열기
                       </button>
+                    </div>
+
+                    {/* 제안 메일 초안 */}
+                    <div className="bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border border-emerald-600/50 rounded-lg p-4 mb-2">
+                      <h4 className="text-white font-bold mb-1">📧 제안 메일 초안 생성</h4>
+                      <p className="text-emerald-200/70 text-xs mb-3">채널 분석 데이터를 반영해 담당자에게 바로 보낼 수 있는 제안 메일 본문을 만듭니다. 브랜디드 PPL·기획 PPL·공동구매·협업 제안 모두에 활용 가능합니다.</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                        <input type="text" placeholder="브랜드/회사명" value={proposalEmailForm.brandName} onChange={e => setProposalEmailForm({...proposalEmailForm, brandName: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                        <input type="text" placeholder="발신자명" value={proposalEmailForm.senderName} onChange={e => setProposalEmailForm({...proposalEmailForm, senderName: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                        <select value={proposalEmailForm.pplType} onChange={e => setProposalEmailForm({...proposalEmailForm, pplType: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500">
+                          <option>브랜디드 PPL</option>
+                          <option>기획 PPL</option>
+                          <option>공동구매</option>
+                          <option>단순 협업</option>
+                        </select>
+                        <input type="text" placeholder="제품/서비스명 (선택)" value={proposalEmailForm.productName} onChange={e => setProposalEmailForm({...proposalEmailForm, productName: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                      </div>
+                      <button onClick={handleGenerateProposalEmail} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-lg flex items-center justify-center gap-2 transition font-bold text-sm">
+                        ✍️ 메일 초안 생성
+                      </button>
+                      {proposalEmailText && (
+                        <div className="mt-3">
+                          <textarea readOnly value={proposalEmailText} rows={14} onFocus={e => e.target.select()} className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-slate-200 text-xs font-mono leading-relaxed" />
+                          <button onClick={handleCopyProposalEmail} className="w-full mt-2 bg-slate-700 hover:bg-slate-600 text-white py-2 rounded-lg text-sm transition">📋 클립보드에 복사</button>
+                          <p className="text-slate-500 text-xs mt-1">대괄호 [ ] 부분은 직접 채워 넣거나 다듬은 뒤 보내주세요.</p>
+                        </div>
+                      )}
                     </div>
 
                     <button onClick={handleExportExcel} className="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg flex items-center justify-center gap-2 transition font-semibold">
