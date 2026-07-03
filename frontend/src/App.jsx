@@ -328,7 +328,7 @@ export default function YouTubeAnalyzer() {
   const [campaignLogForm, setCampaignLogForm] = useState({ date: '', actualQty: '', actualRevenue: '', totalMG: '', videoId: '', note: '' });
   const [editingHistoryId, setEditingHistoryId] = useState(null);
   const [historyEditForm, setHistoryEditForm] = useState({ productPrice: '', cost: '', totalMG: '', agencyMGShareRate: '', rsRate: '' });
-  const [proposalEmailForm, setProposalEmailForm] = useState({ brandName: '제스파', senderName: '', pplType: '브랜디드 PPL', productName: '' });
+  const [proposalEmailForm, setProposalEmailForm] = useState({ brandName: '제스파', senderName: '', productName: '' });
   const [proposalEmailText, setProposalEmailText] = useState('');
 
   // 채널 메타 (상태/메모/태그)
@@ -876,7 +876,6 @@ export default function YouTubeAnalyzer() {
 
     const brand = form.brandName?.trim() || '[브랜드명]';
     const sender = form.senderName?.trim() || '[담당자명]';
-    const pplType = form.pplType || '브랜디드 PPL';
     const productLabel = form.productName?.trim() || '[제품/서비스명]';
     const subsText = formatKoreanCount(channel.subscribers) + '명';
 
@@ -884,23 +883,26 @@ export default function YouTubeAnalyzer() {
     const hasEstimate = ppl.estimatedQty > 0 && ppl.expectedRevenue > 0;
 
     const lines = [];
-    lines.push(`제목: [${brand}] ${productLabel} ${pplType} 제안 드립니다 – ${channel.channelName}님`);
+    lines.push(`제목: [${brand}] ${productLabel} 협업 제안 드립니다 – ${channel.channelName}님`);
     lines.push('');
     lines.push(`안녕하세요, ${brand} ${sender}입니다.`);
     lines.push('');
     lines.push(`${channel.channelName} 채널을 즐겨 보다가, 구독자 ${subsText} 규모와 채널 색깔이 저희 ${productLabel}와 잘 맞을 것 같아 이렇게 연락드리게 되었습니다.`);
     lines.push('');
-    lines.push(`이번에 ${pplType} 형태로 협업을 제안드리고 싶습니다. [여기에 제품/캠페인 소개를 2~3문장으로 넣어주세요]`);
+    lines.push(`이번에 협업을 제안드리고 싶습니다. [여기에 제품/캠페인 소개를 2~3문장으로 넣어주세요]`);
     lines.push('');
     if (reasons.length > 0) {
       lines.push(`${channel.channelName} 채널에 제안드리는 이유는 다음과 같습니다.`);
       reasons.forEach(r => lines.push(`- ${r}`));
       lines.push('');
     }
-    lines.push('협업 조건은 아래와 같이 제안드리며, 세부 사항은 편하신 방향으로 조율 가능합니다.');
-    lines.push(`- 제안 형태: ${pplType}`);
+    lines.push('협업은 아래와 같이 다양한 방식으로 가능하며, 채널 성격에 맞는 방향으로 자유롭게 제안 주셔도 좋습니다.');
+    lines.push('- 브랜디드 PPL: 기존에 하시던 콘텐츠 포맷에 제품을 자연스럽게 녹이는 방식');
+    lines.push('- 기획 PPL: 브랜드와 크리에이터가 함께 스토리라인/컨셉을 기획해 새로 제작하는 방식');
+    lines.push('- 공동구매(RS, 매출 이익 공유): 판매 성과에 따라 수익을 나누는 방식');
+    lines.push('- 이 외에도 채널에 맞는 다른 형태의 협업이면 무엇이든 편하게 제안 주세요');
     if (hasEstimate) {
-      lines.push(`- 저희 쪽 자체 추정 기준 예상 판매수량 ${ppl.estimatedQty.toLocaleString()}개, 예상 매출 ${ppl.expectedRevenue.toLocaleString()}원입니다 (실제 성과는 캠페인 진행 방식에 따라 달라질 수 있습니다)`);
+      lines.push(`- 참고로 저희 쪽 자체 추정 기준 예상 판매수량 ${ppl.estimatedQty.toLocaleString()}개, 예상 매출 ${ppl.expectedRevenue.toLocaleString()}원입니다 (실제 성과는 캠페인 진행 방식에 따라 달라질 수 있습니다)`);
     }
     lines.push('- MG/RS 등 구체적인 조건은 회신 주시면 상세히 안내드리겠습니다');
     lines.push('');
@@ -2915,18 +2917,10 @@ export default function YouTubeAnalyzer() {
                     {/* 제안 메일 초안 */}
                     <div className="bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border border-emerald-600/50 rounded-lg p-4 mb-2">
                       <h4 className="text-white font-bold mb-1">📧 제안 메일 초안 생성</h4>
-                      <p className="text-emerald-200/70 text-xs mb-3">채널 분석 데이터를 반영해 담당자에게 바로 보낼 수 있는 제안 메일 본문을 만듭니다. 브랜디드 PPL·기획 PPL·공동구매·협업 제안 모두에 활용 가능합니다.</p>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                      <p className="text-emerald-200/70 text-xs mb-3">채널 분석 데이터를 반영해 담당자에게 바로 보낼 수 있는 제안 메일 본문을 만듭니다. 브랜디드 PPL·기획 PPL·공동구매(RS)·기타 협업 방식을 모두 안내하는 내용으로 자동 구성됩니다.</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
                         <input type="text" placeholder="브랜드/회사명" value={proposalEmailForm.brandName} onChange={e => setProposalEmailForm({...proposalEmailForm, brandName: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
                         <input type="text" placeholder="발신자명" value={proposalEmailForm.senderName} onChange={e => setProposalEmailForm({...proposalEmailForm, senderName: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
-                        <select value={proposalEmailForm.pplType} onChange={e => setProposalEmailForm({...proposalEmailForm, pplType: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500">
-                          <option>브랜디드 PPL</option>
-                          <option>기획 PPL</option>
-                          <option>공동구매</option>
-                          <option>단순 협업</option>
-                        </select>
                         <input type="text" placeholder="제품/서비스명 (선택)" value={proposalEmailForm.productName} onChange={e => setProposalEmailForm({...proposalEmailForm, productName: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
                       </div>
                       <button onClick={handleGenerateProposalEmail} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-lg flex items-center justify-center gap-2 transition font-bold text-sm">
