@@ -91,4 +91,15 @@ export const getPublicSummary = async (token) => {
   return response.data;
 };
 
+// 딜 조건 변경 이력 수정/삭제
+export const updateSettingsHistory = async (channelId, historyId, fields) => {
+  const response = await api.patch(`/channels/${channelId}/settings-history/${historyId}`, fields);
+  return response.data;
+};
+
+export const deleteSettingsHistory = async (channelId, historyId) => {
+  const response = await api.delete(`/channels/${channelId}/settings-history/${historyId}`);
+  return response.data;
+};
+
 export default api;

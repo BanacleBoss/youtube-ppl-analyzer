@@ -118,6 +118,11 @@ const channelSchema = new mongoose.Schema({
     rsRate: Number
   }],
 
+  // 채널 최초 생성 시 pplSettings는 스키마 기본값(판매가 5만원/분담률 30%/RS율 20% 등)으로 채워지는데,
+  // 이는 사용자가 실제로 입력한 딜 조건이 아니라 임시 placeholder다.
+  // 이 플래그가 false인 상태에서 처음 저장되는 설정은 "진짜 변경"이 아니므로 이력에 남기지 않는다.
+  dealConfigured: { type: Boolean, default: false },
+
   // 채널 관리 메타
   status: { type: String, enum: ['관심', '협의중', '완료', '보류', '미분류'], default: '미분류' },
   memo: { type: String, default: '' },
@@ -736,9 +741,11 @@ app.post('/api/channels/:id/settings', async (req, res) => {
     };
 
     // 딜 조건(가격/원가/MG/RS 등)이 실제로 바뀌었으면, 바뀌기 전 값을 이력에 스냅샷으로 남긴다.
+    // 단, dealConfigured가 false인 상태(=채널 생성 후 아직 한 번도 실제로 딜 조건을 저장한 적 없음)의
+    // 첫 저장은 "스키마 기본값 → 실제값"으로 바뀌는 것일 뿐 진짜 변경이 아니므로 이력에 남기지 않는다.
     const DEAL_FIELDS = ['productPrice', 'cost', 'shippingCost', 'giftCost', 'pgFeeRate', 'totalMG', 'agencyMGShareRate', 'rsRate'];
     const prev = channel.pplSettings || {};
-    const dealChanged = DEAL_FIELDS.some(f => Number(prev[f] || 0) !== Number(nextSettings[f] || 0));
+    const dealChanged = channel.dealConfigured && DEAL_FIELDS.some(f => Number(prev[f] || 0) !== Number(nextSettings[f] || 0));
     if (dealChanged) {
       if (!channel.pplSettingsHistory) channel.pplSettingsHistory = [];
       channel.pplSettingsHistory.push({
@@ -755,6 +762,7 @@ app.post('/api/channels/:id/settings', async (req, res) => {
     }
 
     channel.pplSettings = nextSettings;
+    channel.dealConfigured = true;
 
     // 새로운 설정으로 PPL 계산 업데이트
     const pplData = calculatePPLSummary(channel.videos, channel.pplSettings);
@@ -770,6 +778,45 @@ app.post('/api/channels/:id/settings', async (req, res) => {
         riskLevel: pplData.riskLevel
       };
     }
+
+    await channel.save();
+    res.json(channel);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PATCH: 딜 조건 변경 이력 항목 수정 (예: 채널 생성 초기 placeholder 값이 잘못 기록된 경우 실제 값으로 정정)
+app.patch('/api/channels/:id/settings-history/:historyId', async (req, res) => {
+  try {
+    const channel = await Channel.findById(req.params.id);
+    if (!channel) return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
+
+    const entry = channel.pplSettingsHistory.id(req.params.historyId);
+    if (!entry) return res.status(404).json({ error: '이력 항목을 찾을 수 없습니다' });
+
+    const FIELDS = ['productPrice', 'cost', 'shippingCost', 'giftCost', 'pgFeeRate', 'totalMG', 'agencyMGShareRate', 'rsRate'];
+    FIELDS.forEach(f => {
+      if (req.body[f] !== undefined) entry[f] = toNonNegativeNumber(req.body[f], entry[f] || 0);
+    });
+    if (req.body.changedAt) entry.changedAt = new Date(req.body.changedAt);
+
+    await channel.save();
+    res.json(channel);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE: 딜 조건 변경 이력 항목 삭제 (잘못 기록된 항목 정리용)
+app.delete('/api/channels/:id/settings-history/:historyId', async (req, res) => {
+  try {
+    const channel = await Channel.findById(req.params.id);
+    if (!channel) return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
+
+    const entry = channel.pplSettingsHistory.id(req.params.historyId);
+    if (!entry) return res.status(404).json({ error: '이력 항목을 찾을 수 없습니다' });
+    entry.deleteOne();
 
     await channel.save();
     res.json(channel);

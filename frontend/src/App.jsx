@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle, Package, Pencil, Camera } from 'lucide-react';
 import html2canvas from 'html2canvas';
-import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog, getShareLink, revokeShareLink, setVideoCampaignFlag } from './api';
+import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog, getShareLink, revokeShareLink, setVideoCampaignFlag, updateSettingsHistory, deleteSettingsHistory } from './api';
 
 const InfoTooltip = ({ content, children }) => {
   const [showTooltip, setShowTooltip] = useState(false);
@@ -326,6 +326,8 @@ export default function YouTubeAnalyzer() {
 
   // 캠페인 실적 기록
   const [campaignLogForm, setCampaignLogForm] = useState({ date: '', actualQty: '', actualRevenue: '', totalMG: '', videoId: '', note: '' });
+  const [editingHistoryId, setEditingHistoryId] = useState(null);
+  const [historyEditForm, setHistoryEditForm] = useState({ productPrice: '', cost: '', totalMG: '', agencyMGShareRate: '', rsRate: '' });
 
   // 채널 메타 (상태/메모/태그)
   const [metaForm, setMetaForm] = useState({ status: '미분류', memo: '', channelTags: [] });
@@ -481,6 +483,50 @@ export default function YouTubeAnalyzer() {
       setChannels(channels.map(ch => ch._id === channelId ? updated : ch));
     } catch (err) {
       setError('실적 기록 삭제 실패: ' + (err.response?.data?.error || err.message));
+    }
+  };
+
+  // 딜 조건 변경 이력 수정 시작 — 기존 값을 편집 폼에 채워 넣는다.
+  const startEditHistory = (h) => {
+    setEditingHistoryId(h._id);
+    setHistoryEditForm({
+      productPrice: h.productPrice ?? 0,
+      cost: h.cost ?? 0,
+      totalMG: h.totalMG ?? 0,
+      agencyMGShareRate: h.agencyMGShareRate !== undefined && h.agencyMGShareRate !== null ? (h.agencyMGShareRate * 100) : 0,
+      rsRate: h.rsRate !== undefined && h.rsRate !== null ? (h.rsRate * 100) : 0
+    });
+  };
+
+  const cancelEditHistory = () => {
+    setEditingHistoryId(null);
+    setHistoryEditForm({ productPrice: '', cost: '', totalMG: '', agencyMGShareRate: '', rsRate: '' });
+  };
+
+  const handleUpdateSettingsHistory = async (channelId, historyId) => {
+    try {
+      const updated = await updateSettingsHistory(channelId, historyId, {
+        productPrice: Math.max(0, parseInt(historyEditForm.productPrice) || 0),
+        cost: Math.max(0, parseInt(historyEditForm.cost) || 0),
+        totalMG: Math.max(0, parseInt(historyEditForm.totalMG) || 0),
+        agencyMGShareRate: Math.max(0, parseFloat(historyEditForm.agencyMGShareRate) || 0) / 100,
+        rsRate: Math.max(0, parseFloat(historyEditForm.rsRate) || 0) / 100
+      });
+      setChannels(channels.map(ch => ch._id === channelId ? updated : ch));
+      cancelEditHistory();
+      setError('✓ 이력이 수정되었습니다');
+    } catch (err) {
+      setError('이력 수정 실패: ' + (err.response?.data?.error || err.message));
+    }
+  };
+
+  const handleDeleteSettingsHistory = async (channelId, historyId) => {
+    if (!window.confirm('이 이력 항목을 삭제하시겠습니까?')) return;
+    try {
+      const updated = await deleteSettingsHistory(channelId, historyId);
+      setChannels(channels.map(ch => ch._id === channelId ? updated : ch));
+    } catch (err) {
+      setError('이력 삭제 실패: ' + (err.response?.data?.error || err.message));
     }
   };
 
@@ -2607,17 +2653,37 @@ export default function YouTubeAnalyzer() {
                                 <th className="text-right p-2">총 MG</th>
                                 <th className="text-right p-2">대행사 분담률</th>
                                 <th className="text-right p-2">RS율</th>
+                                <th className="text-center p-2">관리</th>
                               </tr></thead>
                               <tbody>
                                 {[...selectedChannel.pplSettingsHistory].sort((a, b) => new Date(b.changedAt) - new Date(a.changedAt)).map((h, i) => (
-                                  <tr key={h._id || i} className="border-t border-slate-700 hover:bg-slate-700/40">
-                                    <td className="p-2 text-slate-300 whitespace-nowrap">{new Date(h.changedAt).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
-                                    <td className="text-right p-2 text-white">{(h.productPrice || 0).toLocaleString()}원</td>
-                                    <td className="text-right p-2 text-white">{(h.cost || 0).toLocaleString()}원</td>
-                                    <td className="text-right p-2 text-white">{(h.totalMG || 0).toLocaleString()}원</td>
-                                    <td className="text-right p-2 text-slate-300">{((h.agencyMGShareRate || 0) * 100).toFixed(0)}%</td>
-                                    <td className="text-right p-2 text-slate-300">{((h.rsRate || 0) * 100).toFixed(0)}%</td>
-                                  </tr>
+                                  editingHistoryId === h._id ? (
+                                    <tr key={h._id || i} className="border-t border-slate-700 bg-slate-700/40">
+                                      <td className="p-2 text-slate-400 whitespace-nowrap text-xs">{new Date(h.changedAt).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
+                                      <td className="p-1"><input type="number" min="0" value={historyEditForm.productPrice} onChange={e => setHistoryEditForm({...historyEditForm, productPrice: e.target.value})} className="w-24 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-right text-xs" /></td>
+                                      <td className="p-1"><input type="number" min="0" value={historyEditForm.cost} onChange={e => setHistoryEditForm({...historyEditForm, cost: e.target.value})} className="w-24 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-right text-xs" /></td>
+                                      <td className="p-1"><input type="number" min="0" value={historyEditForm.totalMG} onChange={e => setHistoryEditForm({...historyEditForm, totalMG: e.target.value})} className="w-24 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-right text-xs" /></td>
+                                      <td className="p-1"><input type="number" min="0" max="100" value={historyEditForm.agencyMGShareRate} onChange={e => setHistoryEditForm({...historyEditForm, agencyMGShareRate: e.target.value})} className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-right text-xs" /></td>
+                                      <td className="p-1"><input type="number" min="0" max="100" value={historyEditForm.rsRate} onChange={e => setHistoryEditForm({...historyEditForm, rsRate: e.target.value})} className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-right text-xs" /></td>
+                                      <td className="text-center p-1 whitespace-nowrap">
+                                        <button onClick={() => handleUpdateSettingsHistory(selectedChannel._id, h._id)} className="text-green-400 hover:text-green-300 text-xs px-1.5 py-0.5 border border-green-600/40 rounded mr-1">저장</button>
+                                        <button onClick={cancelEditHistory} className="text-slate-400 hover:text-slate-300 text-xs px-1.5 py-0.5 border border-slate-600 rounded">취소</button>
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    <tr key={h._id || i} className="border-t border-slate-700 hover:bg-slate-700/40">
+                                      <td className="p-2 text-slate-300 whitespace-nowrap">{new Date(h.changedAt).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</td>
+                                      <td className="text-right p-2 text-white">{(h.productPrice || 0).toLocaleString()}원</td>
+                                      <td className="text-right p-2 text-white">{(h.cost || 0).toLocaleString()}원</td>
+                                      <td className="text-right p-2 text-white">{(h.totalMG || 0).toLocaleString()}원</td>
+                                      <td className="text-right p-2 text-slate-300">{((h.agencyMGShareRate || 0) * 100).toFixed(0)}%</td>
+                                      <td className="text-right p-2 text-slate-300">{((h.rsRate || 0) * 100).toFixed(0)}%</td>
+                                      <td className="text-center p-2 whitespace-nowrap">
+                                        <button onClick={() => startEditHistory(h)} className="text-blue-400 hover:text-blue-300 p-1"><Pencil size={14} /></button>
+                                        <button onClick={() => handleDeleteSettingsHistory(selectedChannel._id, h._id)} className="text-red-400 hover:text-red-300 p-1"><Trash2 size={14} /></button>
+                                      </td>
+                                    </tr>
+                                  )
                                 ))}
                               </tbody>
                             </table>
