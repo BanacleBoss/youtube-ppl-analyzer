@@ -340,6 +340,50 @@ function preserveOurCampaignFlags(oldVideos, newVideos) {
   return newVideos.map(v => flagMap.has(v.videoId) ? { ...v, ourCampaign: true } : v);
 }
 
+// 채널 데이터를 새로 받아왔을 때 채널 문서에 반영하는 공통 로직.
+// 예전에는 수동 새로고침/전체 새로고침/매일 자동 갱신 3곳에 이 로직이 각자 복붙되어 있었는데,
+// 그러다 보니 한쪽만 고치고 다른 쪽은 빠뜨리는 사고가 반복됐다(채널 개설일 필드가 그 예).
+// 앞으로 갱신 시 반영할 필드가 늘어나도 여기 한 곳만 고치면 3곳 모두에 적용되도록 한곳으로 모은다.
+function applyChannelRefresh(channel, channelInfo, videos) {
+  channel.videos = preserveOurCampaignFlags(channel.videos, videos);
+  channel.channelName = channelInfo.channelName;
+  channel.subscribers = channelInfo.subscribers;
+  channel.totalViews = channelInfo.totalViews;
+  channel.country = channelInfo.country;
+  channel.channelKeywords = channelInfo.channelKeywords;
+  channel.videoCount = channelInfo.videoCount;
+  channel.channelPublishedAt = channelInfo.channelPublishedAt;
+  channel.lastUpdated = new Date();
+
+  const pplData = calculatePPLSummary(videos, channel.pplSettings);
+  const today = new Date().toISOString().split('T')[0];
+  const todayStats = channel.dailyStats.find(d => d.date === today);
+  if (!todayStats) {
+    channel.dailyStats.push({
+      date: today,
+      subscribers: channelInfo.subscribers,
+      engagement: parseFloat(pplData.engagement),
+      avgViews: pplData.avgViews,
+      predictedRevenue: pplData.expectedRevenue,
+      riskLevel: pplData.riskLevel
+    });
+  } else {
+    todayStats.subscribers = channelInfo.subscribers;
+  }
+
+  channel.history.push({
+    date: new Date(),
+    engagement: parseFloat(pplData.engagement),
+    avgViews: pplData.avgViews,
+    predictedRevenue: pplData.expectedRevenue
+  });
+  if (channel.history.length > 90) {
+    channel.history = channel.history.slice(-90);
+  }
+
+  return pplData;
+}
+
 class YouTubeAnalyzer {
   constructor(apiKey) {
     this.apiKey = apiKey;
@@ -349,26 +393,34 @@ class YouTubeAnalyzer {
   async getChannelInfo(channelId) {
     try {
       let channelId_real = channelId;
-      
-      if (channelId.startsWith('@')) {
-        channelId = channelId.substring(1);
-      }
 
-      const searchResponse = await axios.get(`${this.baseURL}/search`, {
-        params: {
-          part: 'snippet',
-          q: channelId,
-          type: 'channel',
-          maxResults: 1,
-          key: this.apiKey
+      // 이미 정확한 채널 ID(UC로 시작하는 24자)를 알고 있는 경우(채널 새로고침 시 항상 이 경우)에는
+      // 검색 API를 거치지 않고 바로 조회한다. 검색은 텍스트 매칭이라 결과가 흔들릴 수 있는데,
+      // 새로고침할 때마다 검색 top-1 결과로 채널을 다시 "찾는" 방식이면 극히 드물게 검색 결과가
+      // 바뀌어 엉뚱한 채널 데이터로 덮어써질 위험이 있다. 이미 ID를 아는데 굳이 다시 찾을 이유가 없다.
+      if (/^UC[\w-]{22}$/.test(channelId)) {
+        channelId_real = channelId;
+      } else {
+        if (channelId.startsWith('@')) {
+          channelId = channelId.substring(1);
         }
-      });
 
-      if (!searchResponse.data.items || searchResponse.data.items.length === 0) {
-        throw new Error('채널을 찾을 수 없습니다');
+        const searchResponse = await axios.get(`${this.baseURL}/search`, {
+          params: {
+            part: 'snippet',
+            q: channelId,
+            type: 'channel',
+            maxResults: 1,
+            key: this.apiKey
+          }
+        });
+
+        if (!searchResponse.data.items || searchResponse.data.items.length === 0) {
+          throw new Error('채널을 찾을 수 없습니다');
+        }
+
+        channelId_real = searchResponse.data.items[0].snippet.channelId;
       }
-
-      channelId_real = searchResponse.data.items[0].snippet.channelId;
 
       const response = await axios.get(`${this.baseURL}/channels`, {
         params: {
@@ -606,46 +658,7 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
     const videos = await analyzer.getChannelVideos(channel.channelId);
     console.log(`[REFRESH] 영상 수집 완료: ${videos.length}개`);
 
-    const pplData = calculatePPLSummary(videos, channel.pplSettings);
-    const today = new Date().toISOString().split('T')[0];
-    const todayStats = channel.dailyStats.find(d => d.date === today);
-
-    if (!todayStats) {
-      channel.dailyStats.push({
-        date: today,
-        subscribers: channelInfo.subscribers,
-        engagement: parseFloat(pplData.engagement),
-        avgViews: pplData.avgViews,
-        predictedRevenue: pplData.expectedRevenue,
-        riskLevel: pplData.riskLevel
-      });
-    } else {
-      // 오늘 이미 있으면 구독자 수만 업데이트
-      todayStats.subscribers = channelInfo.subscribers;
-    }
-
-    channel.channelName = channelInfo.channelName;
-    channel.subscribers = channelInfo.subscribers;
-    channel.totalViews = channelInfo.totalViews;
-    channel.country = channelInfo.country;
-    channel.channelKeywords = channelInfo.channelKeywords;
-    channel.videoCount = channelInfo.videoCount;
-    // 채널 개설일 — 예전에 이 필드가 없던 시절 추가된 채널은 값이 비어있을 수 있으므로 갱신 때마다 채워준다.
-    channel.channelPublishedAt = channelInfo.channelPublishedAt;
-    // 전체 영상을 최신 데이터로 교체 (전체 페이지네이션으로 가져오므로 누적 불필요)
-    channel.videos = preserveOurCampaignFlags(channel.videos, videos);
-    channel.lastUpdated = new Date();
-
-    channel.history.push({
-      date: new Date(),
-      engagement: parseFloat(pplData.engagement),
-      avgViews: pplData.avgViews,
-      predictedRevenue: pplData.expectedRevenue
-    });
-
-    if (channel.history.length > 90) {
-      channel.history = channel.history.slice(-90);
-    }
+    applyChannelRefresh(channel, channelInfo, videos);
 
     await channel.save();
     res.json({
@@ -672,28 +685,7 @@ app.post('/api/channels/refresh-all', async (req, res) => {
         const channelInfo = await analyzer.getChannelInfo(channel.channelId);
         const videos = await analyzer.getChannelVideos(channel.channelId);
 
-        channel.videos = preserveOurCampaignFlags(channel.videos, videos);
-        channel.subscribers = channelInfo.subscribers;
-        channel.totalViews = channelInfo.totalViews;
-        channel.channelName = channelInfo.channelName;
-        channel.channelPublishedAt = channelInfo.channelPublishedAt;
-        channel.lastUpdated = new Date();
-
-        const pplData = calculatePPLSummary(videos, channel.pplSettings);
-        const today = new Date().toISOString().split('T')[0];
-        const todayStats = channel.dailyStats.find(d => d.date === today);
-        if (!todayStats) {
-          channel.dailyStats.push({
-            date: today,
-            subscribers: channelInfo.subscribers,
-            engagement: parseFloat(pplData.engagement),
-            avgViews: pplData.avgViews,
-            predictedRevenue: pplData.expectedRevenue,
-            riskLevel: pplData.riskLevel
-          });
-        } else {
-          todayStats.subscribers = channelInfo.subscribers;
-        }
+        applyChannelRefresh(channel, channelInfo, videos);
 
         await channel.save();
         results.push({ id: channel._id, name: channel.channelName, success: true, totalVideos: videos.length });
@@ -870,6 +862,14 @@ app.post('/api/channels/:id/campaign-logs', async (req, res) => {
 
     const { date, actualQty, actualRevenue, totalMG, videoId, note } = req.body;
     if (!date) return res.status(400).json({ error: '집계 기준일을 입력하세요' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: '집계 기준일은 YYYY-MM-DD 형식이어야 합니다' });
+    }
+    // 연결 영상은 실제로 이 채널의 영상이어야 한다 — 오타/유효하지 않은 videoId가 그대로 저장되면
+    // 나중에 channel.videos와 조인할 때 조용히 매칭 실패해서 실측 CPV/조회수가 계속 "-"로만 보이게 된다.
+    if (videoId && !channel.videos.some(v => v.videoId === videoId)) {
+      return res.status(400).json({ error: '선택한 영상이 이 채널의 영상 목록에 없습니다' });
+    }
 
     // 기록 당시의 예상치를 스냅샷으로 함께 저장해두면 나중에 "예상 대비 실제" 비교가 가능하다.
     const pplData = calculatePPLSummary(channel.videos, channel.pplSettings);
@@ -1406,28 +1406,8 @@ async function setupScheduling() {
         try {
           const channelInfo = await analyzer.getChannelInfo(channel.channelId);
           const videos = await analyzer.getChannelVideos(channel.channelId);
-          channel.videos = preserveOurCampaignFlags(channel.videos, videos);
-          channel.subscribers = channelInfo.subscribers;
-          channel.totalViews = channelInfo.totalViews;
-          channel.channelPublishedAt = channelInfo.channelPublishedAt;
-          channel.lastUpdated = new Date();
 
-          const pplData = calculatePPLSummary(videos, channel.pplSettings);
-          const today = new Date().toISOString().split('T')[0];
-          const todayStats = channel.dailyStats.find(d => d.date === today);
-
-          if (!todayStats) {
-            channel.dailyStats.push({
-              date: today,
-              subscribers: channelInfo.subscribers,
-              engagement: parseFloat(pplData.engagement),
-              avgViews: pplData.avgViews,
-              predictedRevenue: pplData.expectedRevenue,
-              riskLevel: pplData.riskLevel
-            });
-          } else {
-            todayStats.subscribers = channelInfo.subscribers;
-          }
+          applyChannelRefresh(channel, channelInfo, videos);
 
           await channel.save();
           console.log(`[스케줄] ✓ ${channel.channelName} 갱신 완료 (${videos.length}개 영상)`);

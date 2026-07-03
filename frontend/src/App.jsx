@@ -367,6 +367,14 @@ export default function YouTubeAnalyzer() {
         agencyMGShareRate: ch.pplSettings.agencyMGShareRate ?? 0.3,
         rsRate: ch.pplSettings.rsRate ?? 0.2,
       });
+    } else if (ch) {
+      // pplSettings가 없는(비정상/legacy) 채널로 전환한 경우 이전 채널의 설정값이 그대로 남아있으면
+      // 엉뚱한 채널 기준으로 BEP/추천 조건이 계산되는 크로스채널 오염이 발생한다 — 반드시 기본값으로 초기화한다.
+      setSettings({
+        productPrice: 50000, expectedClicks: 0, expectedConversionRate: 0.03,
+        itemId: '', itemName: '', cost: 0, shippingCost: 0, giftCost: 0,
+        pgFeeRate: 0.0385, totalMG: 0, agencyMGShareRate: 0.3, rsRate: 0.2,
+      });
     }
     // 채널 메타 폼 초기화
     if (ch) {
@@ -538,7 +546,7 @@ export default function YouTubeAnalyzer() {
     try {
       await setVideoCampaignFlag(channelId, videoId, !current);
       setChannels(channels.map(ch => ch._id === channelId
-        ? { ...ch, videos: ch.videos.map(v => v.videoId === videoId ? { ...v, ourCampaign: !current } : v) }
+        ? { ...ch, videos: (ch.videos || []).map(v => v.videoId === videoId ? { ...v, ourCampaign: !current } : v) }
         : ch));
     } catch (err) {
       setError('캠페인 영상 표시 실패: ' + (err.response?.data?.error || err.message));
@@ -1057,184 +1065,12 @@ export default function YouTubeAnalyzer() {
     }
   };
 
-  const filterVideos = (videos, type) => {
-    return (videos || []).filter(v => {
-      const duration = v.duration || 0;
-      if (type === 'shorts') return duration <= 60;          // 60초 이하: 숏폼
-      if (type === 'mid') return duration > 60 && duration <= 600;  // 1~10분: 미드폼
-      if (type === 'longform') return duration > 600;        // 10분 초과: 롱폼
-      return true;
-    });
-  };
-
-  // PPL 매출/손익 분석 — MG/RS/원가 구조를 반영한 통합 계산
-  // 예상 판매수량(예상 클릭수 × 전환율)에 개당 기여마진을 곱해 순이익을 구하고,
-  // 우리측 MG 부담금(고정비)을 차감한다. (손익/BEP 탭의 calculateBEP와 동일한 원가 기준 사용)
-  const calculatePPLRevenue = (videos) => {
-    const longformVideos = filterVideos(videos, 'longform');
-    if (!longformVideos || longformVideos.length === 0) {
-      return { avgViews: 0, engagement: 0, expectedClicks: 0, clickRate: null, cpv: null, estimatedQty: 0, expectedRevenue: 0, unitMargin: 0, ourMGShare: 0, netProfit: 0, roi: null, roas: null, riskLevel: '평가 불가' };
-    }
-    const recentVideos = longformVideos.slice(0, 10);
-    const engagement = recentVideos.reduce((sum, v) => sum + (parseFloat(v.engagement) || 0), 0) / recentVideos.length / 100;
-    const avgViews = recentVideos.reduce((sum, v) => sum + (v.views || 0), 0) / recentVideos.length;
-    const expectedClicks = Number(settings.expectedClicks) || 0;
-
-    const estimatedQty = expectedClicks * settings.expectedConversionRate;
-    const expectedRevenue = estimatedQty * settings.productPrice;
-    const clickRate = avgViews > 0 ? (expectedClicks / avgViews * 100) : null;
-    const cpv = avgViews > 0 ? Number((settings.totalMG / avgViews).toFixed(2)) : null;
-
-    const bep = calculateBEP(settings);
-    const netProfit = estimatedQty * bep.unitMargin - bep.ourMGShare;
-    const roi = bep.ourMGShare > 0 ? (netProfit / bep.ourMGShare * 100) : null;
-    const roas = bep.ourMGShare > 0 ? (expectedRevenue / bep.ourMGShare * 100) : null;
-
-    // BEP 달성 여부(ROI 0% 기준)와 항상 일치하도록: ROI<0(BEP 미달)일 때만 '높음'
-    let riskLevel = '평가 불가';
-    if (roi !== null) {
-      if (roi < 0) riskLevel = '높음';
-      else if (roi < 100) riskLevel = '중간';
-      else riskLevel = '낮음';
-    }
-
-    const cpm = cpv !== null ? Math.round(cpv * 1000) : null;
-
-    return {
-      avgViews: Math.round(avgViews),
-      engagement: (engagement * 100).toFixed(2),
-      expectedClicks: Math.round(expectedClicks),
-      clickRate: clickRate !== null ? parseFloat(clickRate.toFixed(2)) : null,
-      cpv,
-      cpm,
-      estimatedQty: Math.round(estimatedQty),
-      expectedRevenue: Math.round(expectedRevenue),
-      unitMargin: bep.unitMargin,
-      ourMGShare: bep.ourMGShare,
-      bepQty: bep.bepQty,
-      netProfit: Math.round(netProfit),
-      roi: roi !== null ? parseFloat(roi.toFixed(2)) : null,
-      roas: roas !== null ? parseFloat(roas.toFixed(2)) : null,
-      riskLevel
-    };
-  };
-
-  const calculateViewTrend = (videos) => {
-    const sorted = [...(videos || [])].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
-    const recent = sorted.slice(0, 10);
-    const prev = sorted.slice(10, 20);
-    if (recent.length === 0) return null;
-    const recentAvg = recent.reduce((s, v) => s + (v.views || 0), 0) / recent.length;
-    const prevAvg = prev.length > 0 ? prev.reduce((s, v) => s + (v.views || 0), 0) / prev.length : null;
-    const change = prevAvg ? ((recentAvg - prevAvg) / prevAvg * 100) : null;
-    const chartData = sorted.slice(0, 20).reverse().map((v, i) => ({
-      name: `${i + 1}`,
-      views: v.views || 0,
-      title: v.title
-    }));
-    return {
-      recentAvg: Math.round(recentAvg),
-      prevAvg: prevAvg ? Math.round(prevAvg) : null,
-      change: change !== null ? parseFloat(change.toFixed(1)) : null,
-      chartData
-    };
-  };
-
-  // 효율 점수 계산 (0~100점)
-  // 인게이지먼트 35 + 구독자대비조회수 25 + 조회수일관성 15 + 업로드주기 10 + 광고비율 10 + 채널연령 5
-  const calculateEfficiencyScore = (channel) => {
-    const videos = channel?.videos || [];
-    const subscribers = channel?.subscribers || 0;
-    const lf = filterVideos(videos, 'longform');
-    const mid = filterVideos(videos, 'mid');
-    const lfSorted = [...lf].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
-    const recentLF = lfSorted.slice(0, 10);
-
-    // 1. 인게이지먼트율 (35점) — PPL 전환에 가장 직결
-    const engRate = recentLF.length > 0
-      ? recentLF.reduce((s, v) => s + (parseFloat(v.engagement) || 0), 0) / recentLF.length : 0;
-    let engScore = 3;
-    if (engRate >= 5) engScore = 35;
-    else if (engRate >= 3) engScore = 26;
-    else if (engRate >= 1.5) engScore = 17;
-    else if (engRate >= 0.5) engScore = 9;
-
-    // 2. 구독자 대비 조회수 비율 (25점) — 실제 영향력·충성도
-    const recentAvgViews = recentLF.length > 0
-      ? recentLF.reduce((s, v) => s + (v.views || 0), 0) / recentLF.length : 0;
-    const viewsRatio = subscribers > 0 ? (recentAvgViews / subscribers) * 100 : 0;
-    let viewsScore = 3;
-    if (viewsRatio >= 30) viewsScore = 25;
-    else if (viewsRatio >= 15) viewsScore = 19;
-    else if (viewsRatio >= 5) viewsScore = 12;
-    else if (viewsRatio >= 2) viewsScore = 6;
-
-    // 3. 조회수 일관성 (15점) — 예측 가능성·투자 리스크
-    let consistencyScore = 3;
-    let cvPercent = null;
-    if (recentLF.length >= 3) {
-      const views = recentLF.map(v => v.views || 0);
-      const mean = views.reduce((s, v) => s + v, 0) / views.length;
-      if (mean > 0) {
-        const variance = views.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / views.length;
-        const cv = Math.sqrt(variance) / mean * 100; // 변동계수(%)
-        cvPercent = Math.round(cv);
-        if (cv <= 30) consistencyScore = 15;
-        else if (cv <= 60) consistencyScore = 11;
-        else if (cv <= 100) consistencyScore = 6;
-      }
-    }
-
-    // 4. 업로드 주기 (10점) — 롱폼 기준, 활동성
-    let uploadScore = 1;
-    const recentDates = recentLF.map(v => new Date(v.uploadDate)).filter(d => !isNaN(d));
-    let avgGapDays = null;
-    if (recentDates.length >= 2) {
-      let totalGap = 0;
-      for (let i = 0; i < recentDates.length - 1; i++)
-        totalGap += (recentDates[i] - recentDates[i + 1]) / (1000 * 60 * 60 * 24);
-      avgGapDays = Math.round(totalGap / (recentDates.length - 1));
-      if (avgGapDays <= 7) uploadScore = 10;
-      else if (avgGapDays <= 14) uploadScore = 8;
-      else if (avgGapDays <= 30) uploadScore = 5;
-    }
-
-    // 5. 최근 광고 비율 (10점) — 낮을수록 PPL 친화적
-    let adScore = 5;
-    const recentAll = [...videos].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate)).slice(0, 20);
-    const adCount = recentAll.filter(v => v.isAd).length;
-    const adRatio = recentAll.length > 0 ? adCount / recentAll.length * 100 : 0;
-    if (adRatio <= 10) adScore = 10;
-    else if (adRatio <= 25) adScore = 7;
-    else if (adRatio <= 40) adScore = 4;
-    else adScore = 1;
-
-    // 6. 채널 연령 (5점) — 오래될수록 신뢰도·안정성 높음
-    let ageScore = 1;
-    let channelAgeYears = null;
-    if (channel?.channelPublishedAt) {
-      channelAgeYears = (Date.now() - new Date(channel.channelPublishedAt)) / (1000 * 60 * 60 * 24 * 365);
-      if (channelAgeYears >= 5) ageScore = 5;
-      else if (channelAgeYears >= 3) ageScore = 4;
-      else if (channelAgeYears >= 1) ageScore = 2;
-    }
-
-    const total = Math.min(100, engScore + viewsScore + consistencyScore + uploadScore + adScore + ageScore);
-    const longformRatio = (lf.length + mid.length) > 0 ? (lf.length / (lf.length + mid.length) * 100) : 0;
-
-    return {
-      total,
-      details: {
-        engRate: engRate.toFixed(2), engScore,
-        viewsRatio: viewsRatio.toFixed(1), viewsScore,
-        cvPercent, consistencyScore,
-        avgGapDays, uploadScore,
-        adRatio: adRatio.toFixed(1), adScore,
-        channelAgeYears: channelAgeYears ? channelAgeYears.toFixed(1) : null, ageScore,
-        longformRatio: longformRatio.toFixed(1),
-      }
-    };
-  };
+  // filterVideos / calculateViewTrend / calculateEfficiencyScore는 모듈 최상단(파일 위쪽)에 정의된
+  // export const 버전을 그대로 쓴다 — PublicSummary.jsx(외부 공유 페이지)도 같은 모듈 버전을 import해서 쓰므로,
+  // 여기서 따로 재정의하면 두 화면의 계산 로직이 서서히 어긋날 수 있어 일부러 중복 정의하지 않는다.
+  // calculatePPLRevenue만 인자가 (videos, settings) 2개인 모듈 버전(calculatePPLRevenueFor)을
+  // 이 컴포넌트 안에서 자주 쓰는 (videos) 1개짜리 형태로 감싸주는 얇은 래퍼다.
+  const calculatePPLRevenue = (videos) => calculatePPLRevenueFor(videos, settings);
 
   const getSortedVideos = (videos) => {
     const sorted = [...(videos || [])].sort((a, b) => {
@@ -1375,7 +1211,11 @@ export default function YouTubeAnalyzer() {
     // 실제 판매가 기대에 못 미치면 그 차액은 그대로 손실로 남는다 — 이 구조적 리스크는 항상 언급한다.
     const avgViewsForBudget = calculatePPLRevenue(videos).avgViews;
 
-    const qualityMultiplier = 0.6 + (eff.total / 100) * 0.8; // 효율 0점→0.6배, 100점→1.4배
+    // eff.total(효율 점수)에는 이미 광고비율 점수(최대 10점)가 포함돼 있으므로, 그 부분을 뺀 나머지 90점 만점으로
+    // 품질 배수를 계산한다. 그렇지 않으면 광고 비율이 높은 채널이 eff.total 하락 + adFatigueMultiplier 두 군데서
+    // 이중으로 감점돼 광고비 제안이 부당하게 낮아진다.
+    const nonAdScore = eff.total - d.adScore;
+    const qualityMultiplier = 0.6 + (nonAdScore / 90) * 0.8; // 0점→0.6배, 90점(만점)→1.4배
     const fitMultiplier = fitLevel === '높음' ? 1.25 : fitLevel === '중간' ? 0.9 : 0.55;
     const trendMultiplier = trend?.change > 10 ? 1.1 : trend?.change < -10 ? 0.85 : 1.0;
     const adFatigueMultiplier = adRatioVal > 25 ? 0.9 : 1.0;
@@ -2590,7 +2430,7 @@ export default function YouTubeAnalyzer() {
                           <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide">📦 상품 조건</p>
                           <SimSlider label="판매가" value={sim.productPrice} min={10000} max={500000} step={1000} format={simWon} onChange={v => setSim(s=>({...s,productPrice:v}))} />
                           <SimSlider label="원가" value={sim.cost} min={0} max={300000} step={1000} format={simWon} onChange={v => setSim(s=>({...s,cost:v}))} />
-                          <SimSlider label="배송비 + 사은품" value={sim.shippingCost + sim.giftCost} min={0} max={30000} step={1000} format={simWon} onChange={v => setSim(s=>({...s,shippingCost:v,giftCost:0}))} />
+                          <SimSlider label="배송비 + 사은품" value={sim.shippingCost + sim.giftCost} min={0} max={30000} step={1000} format={simWon} onChange={v => setSim(s=>({...s,shippingCost:Math.max(0, v - s.giftCost)}))} />
 
                           <p className="text-slate-400 text-xs font-semibold uppercase tracking-wide pt-2">💰 딜 조건</p>
                           <SimSlider label="총 MG" value={sim.totalMG} min={0} max={20000000} step={10000} format={simWon} onChange={v => setSim(s=>({...s,totalMG:v}))} />
@@ -2889,9 +2729,21 @@ export default function YouTubeAnalyzer() {
                           const logs = selectedChannel.campaignLogs;
                           const avgActualQty = Math.round(logs.reduce((s, l) => s + (l.actualQty || 0), 0) / logs.length);
                           const avgActualRevenue = Math.round(logs.reduce((s, l) => s + (l.actualRevenue || 0), 0) / logs.length);
-                          const avgActualROI = logs.filter(l => l.actualRevenue && pplData.ourMGShare > 0).length > 0
-                            ? (logs.reduce((s, l) => s + (((l.actualRevenue || 0) - pplData.ourMGShare) / pplData.ourMGShare * 100), 0) / logs.length).toFixed(1)
-                            : null;
+                          // 딜 조건(MG/분담률)은 시간이 지나며 바뀔 수 있는데, 과거 로그를 전부 "현재" MG 부담금 기준으로
+                          // 나누면 딜 조건이 바뀐 뒤에는 과거 ROI가 왜곡된다. 로그마다 실제로 입력해둔 광고비(totalMG)가
+                          // 있으면 그걸 우선 쓰고(현재 분담률로 우리측 부담분만 환산), 없는 예전 로그만 현재값으로 보정한다.
+                          const avgActualROI = (() => {
+                            const agencyShare = Number(settings.agencyMGShareRate) || 0;
+                            const withMg = logs
+                              .map(l => ({
+                                actualRevenue: l.actualRevenue || 0,
+                                ourMg: l.totalMG > 0 ? l.totalMG * (1 - agencyShare) : pplData.ourMGShare
+                              }))
+                              .filter(l => l.ourMg > 0);
+                            if (withMg.length === 0) return null;
+                            const sum = withMg.reduce((s, l) => s + ((l.actualRevenue - l.ourMg) / l.ourMg * 100), 0);
+                            return (sum / withMg.length).toFixed(1);
+                          })();
                           return (
                             <div className="mt-6 bg-slate-800 border border-blue-500/30 rounded-lg p-4">
                               <h4 className="text-white font-semibold mb-3">📊 과거 실적 평균 vs 현재 예측 비교</h4>
