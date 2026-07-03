@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
-import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle, Package, Pencil } from 'lucide-react';
+import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle, Package, Pencil, Camera } from 'lucide-react';
+import html2canvas from 'html2canvas';
 import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog, getShareLink, revokeShareLink } from './api';
 
 const InfoTooltip = ({ content, children }) => {
@@ -253,6 +254,8 @@ export default function YouTubeAnalyzer() {
   const [portfolioSortBy, setPortfolioSortBy] = useState('score'); // score | subscribers | avgViews | updated
   const [showSharePanel, setShowSharePanel] = useState(false);
   const [shareBusy, setShareBusy] = useState(null); // 'external' | 'internal' | null
+  const [capturing, setCapturing] = useState(false);
+  const summaryRef = useRef(null);
   const [discoverKeyword, setDiscoverKeyword] = useState('안마기 리뷰');
   const [discoverResults, setDiscoverResults] = useState([]);
   const [discovering, setDiscovering] = useState(false);
@@ -837,6 +840,45 @@ export default function YouTubeAnalyzer() {
   const handleCopyShareLink = (token) => {
     const url = `${window.location.origin}/share/${token}`;
     navigator.clipboard.writeText(url).then(() => setError('✓ 링크가 클립보드에 복사되었습니다'));
+  };
+
+  // 요약 탭을 이미지로 캡처해 클립보드에 복사 — 링크를 노출하지 않고 카카오톡/슬랙 등에 바로 붙여넣어 공유하는 용도
+  const handleCaptureSummary = async () => {
+    if (!summaryRef.current) return;
+    setCapturing(true);
+    try {
+      const canvas = await html2canvas(summaryRef.current, { backgroundColor: '#1e293b', scale: 2, useCORS: true });
+      canvas.toBlob(async (blob) => {
+        if (!blob) { setError('이미지 생성에 실패했습니다'); setCapturing(false); return; }
+        if (navigator.clipboard && window.ClipboardItem) {
+          try {
+            await navigator.clipboard.write([new window.ClipboardItem({ 'image/png': blob })]);
+            setError('✓ 이미지가 클립보드에 복사되었습니다. 원하는 곳에 붙여넣기(Ctrl+V)하세요');
+          } catch (clipErr) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${selectedChannel?.channelName || '채널'}_요약.png`;
+            a.click();
+            URL.revokeObjectURL(url);
+            setError('클립보드 복사가 지원되지 않아 이미지 파일로 다운로드했습니다');
+          }
+        } else {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `${selectedChannel?.channelName || '채널'}_요약.png`;
+          a.click();
+          URL.revokeObjectURL(url);
+          setError('이 브라우저는 클립보드 이미지 복사를 지원하지 않아 이미지 파일로 다운로드했습니다');
+        }
+        setCapturing(false);
+      }, 'image/png');
+    } catch (err) {
+      console.error('캡처 오류:', err);
+      setError('캡처 실패: ' + err.message);
+      setCapturing(false);
+    }
   };
 
   const filterVideos = (videos, type) => {
@@ -1637,7 +1679,7 @@ export default function YouTubeAnalyzer() {
                 </div>
 
                 {activeTab === 'summary' && (
-                  <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
+                  <div ref={summaryRef} className="bg-slate-800 border border-slate-700 rounded-lg p-6">
                     <div className="flex items-start justify-between gap-3 mb-2">
                       <h2 className="text-2xl font-bold text-white">{selectedChannel.channelName}</h2>
                       <div className="flex items-center gap-2 flex-shrink-0">
@@ -1647,14 +1689,19 @@ export default function YouTubeAnalyzer() {
                           if (st === '미분류') return null;
                           return <span className={`text-sm px-3 py-1 rounded-full border font-medium ${statusStyle[st]}`}>{st}</span>;
                         })()}
-                        <button onClick={() => setShowSharePanel(!showSharePanel)} className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded-full transition">
-                          🔗 공유
-                        </button>
+                        <div data-html2canvas-ignore="true" className="flex items-center gap-2">
+                          <button onClick={handleCaptureSummary} disabled={capturing} className="text-xs bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white px-3 py-1.5 rounded-full transition flex items-center gap-1">
+                            <Camera size={12} /> {capturing ? '캡처 중...' : '캡처'}
+                          </button>
+                          <button onClick={() => setShowSharePanel(!showSharePanel)} className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded-full transition">
+                            🔗 공유
+                          </button>
+                        </div>
                       </div>
                     </div>
 
                     {showSharePanel && (
-                      <div className="bg-slate-900/60 border border-slate-700 rounded-lg p-4 mb-4 space-y-3">
+                      <div data-html2canvas-ignore="true" className="bg-slate-900/60 border border-slate-700 rounded-lg p-4 mb-4 space-y-3">
                         <p className="text-slate-400 text-xs">요약 탭을 로그인 없이 볼 수 있는 읽기 전용 링크입니다. 링크를 아는 사람만 접근할 수 있습니다.</p>
                         {[
                           { type: 'external', label: '외부용 링크', desc: '구독자·조회수·효율점수 등 채널 지표만 (MG/ROI 등 금액 정보 제외)' },
