@@ -129,6 +129,25 @@ const channelSchema = new mongoose.Schema({
   memo: { type: String, default: '' },
   channelTags: [{ type: String }],
 
+  // 시청자 프로필(연령대/성별 분포) + 콘텐츠 카테고리.
+  // YouTube Data API(공개 API)는 채널 소유자 본인이 아니면 시청자 연령/성별 통계를 절대 내주지 않는다
+  // (그건 YouTube Analytics API 영역이라 채널 소유자의 OAuth 동의가 있어야만 조회 가능).
+  // 그래서 이 값은 자동 수집이 불가능하고, 협업 논의 중 채널 측에서 공유해주는 미디어킷/애널리틱스 캡처를
+  // 보고 담당자가 직접 입력해두는 "수동 기록용" 필드다. 대행사(쇼크)가 관리하는 리스트의 카테고리/연령대/성별
+  // 컬럼과 동일한 정보를 우리 쪽에도 채널별로 남겨두기 위한 용도.
+  audienceProfile: {
+    category: { type: String, default: '' },        // 콘텐츠 카테고리 (예: 국내V로그, 코미디, 야외활동, 육아, 예능, 리빙 등)
+    age1824: { type: Number, default: null },        // 18~24세 시청자 비율(%)
+    age2534: { type: Number, default: null },        // 25~34세
+    age3544: { type: Number, default: null },        // 35~44세
+    age4554: { type: Number, default: null },        // 45~54세
+    age5564: { type: Number, default: null },        // 55~64세
+    genderMale: { type: Number, default: null },     // 남성 시청자 비율(%)
+    genderFemale: { type: Number, default: null },   // 여성 시청자 비율(%)
+    source: { type: String, default: '' },           // 근거/출처 메모 (예: "2026.06 미디어킷 기준")
+    updatedAt: { type: Date, default: null }
+  },
+
   // 요약 탭 공유 링크 — 토큰을 아는 사람만 읽기 전용으로 조회 가능
   // external: 채널 지표만 (MG/ROI 등 금액 정보 제외), internal: PPL 딜 조건까지 전체 포함
   shareTokens: {
@@ -329,6 +348,16 @@ function toNonNegativeNumber(value, fallback = 0) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) return fallback;
   return n;
+}
+
+// 시청자 연령대/성별 비율처럼 "값이 없을 수도 있는" 0~100% 입력값 검증.
+// toNonNegativeNumber와 달리 빈 값/잘못된 값은 0이 아니라 null로 남겨서
+// "0%로 실제 입력했다"와 "아직 입력 안 했다"를 구분할 수 있게 한다.
+function toPercentOrNull(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(100, Math.max(0, n));
 }
 
 // 채널 갱신 시 영상 목록을 유튜브 API에서 통째로 새로 받아와 교체하는데,
@@ -838,7 +867,7 @@ app.delete('/api/channels/:id', async (req, res) => {
 // PATCH: 채널 메타 정보 (상태/메모/태그) 업데이트
 app.patch('/api/channels/:id/meta', async (req, res) => {
   try {
-    const { status, memo, channelTags } = req.body;
+    const { status, memo, channelTags, audienceProfile } = req.body;
     const channel = await Channel.findById(req.params.id);
     if (!channel) return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
 
@@ -850,8 +879,25 @@ app.patch('/api/channels/:id/meta', async (req, res) => {
     if (memo !== undefined) channel.memo = memo;
     if (channelTags !== undefined) channel.channelTags = channelTags;
 
+    // 시청자 프로필(연령대/성별/카테고리) — 공개 API로는 알 수 없어 수동 입력받는 값이라
+    // 형식만 가볍게 정리(0~100% 범위, 빈 값은 null)하고 그대로 저장한다.
+    if (audienceProfile !== undefined) {
+      channel.audienceProfile = {
+        category: (audienceProfile.category || '').trim(),
+        age1824: toPercentOrNull(audienceProfile.age1824),
+        age2534: toPercentOrNull(audienceProfile.age2534),
+        age3544: toPercentOrNull(audienceProfile.age3544),
+        age4554: toPercentOrNull(audienceProfile.age4554),
+        age5564: toPercentOrNull(audienceProfile.age5564),
+        genderMale: toPercentOrNull(audienceProfile.genderMale),
+        genderFemale: toPercentOrNull(audienceProfile.genderFemale),
+        source: (audienceProfile.source || '').trim(),
+        updatedAt: new Date()
+      };
+    }
+
     await channel.save();
-    res.json({ status: channel.status, memo: channel.memo, channelTags: channel.channelTags });
+    res.json(channel);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

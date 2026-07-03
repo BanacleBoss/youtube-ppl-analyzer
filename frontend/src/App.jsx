@@ -4,6 +4,15 @@ import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, 
 import html2canvas from 'html2canvas';
 import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog, getShareLink, revokeShareLink, setVideoCampaignFlag, updateSettingsHistory, deleteSettingsHistory } from './api';
 
+// 시청자 프로필(연령대/성별/카테고리) 폼의 빈 상태. YouTube 공개 API는 채널 소유자 본인이 아니면
+// 시청자 연령/성별 통계를 절대 내주지 않으므로(그건 채널 주인의 OAuth 동의가 필요한 YouTube Analytics
+// API 영역), 이 정보는 자동 수집이 불가능하다 — 협업 논의 중 채널 측이 공유한 미디어킷/애널리틱스
+// 캡처를 보고 담당자가 직접 입력해두는 수동 기록용 필드다.
+const EMPTY_AUDIENCE_PROFILE = { category: '', age1824: '', age2534: '', age3544: '', age4554: '', age5564: '', genderMale: '', genderFemale: '', source: '' };
+
+// 카테고리 자유 입력을 돕는 프리셋 — 대행사(쇼크)가 관리하는 리스트에서 흔히 쓰는 분류 기준을 참고
+const CATEGORY_PRESETS = ['국내V로그', '국제', '육아', '코미디', '야외활동', '리빙', '예능', '외국인V로그', '국외', '뷰티', '건강', '푸드', '게임', '교육', '반려동물'];
+
 const InfoTooltip = ({ content, children }) => {
   const [showTooltip, setShowTooltip] = useState(false);
   return (
@@ -331,8 +340,8 @@ export default function YouTubeAnalyzer() {
   const [proposalEmailForm, setProposalEmailForm] = useState({ brandName: '제스파', senderName: '', productName: '' });
   const [proposalEmailText, setProposalEmailText] = useState('');
 
-  // 채널 메타 (상태/메모/태그)
-  const [metaForm, setMetaForm] = useState({ status: '미분류', memo: '', channelTags: [] });
+  // 채널 메타 (상태/메모/태그/시청자 프로필)
+  const [metaForm, setMetaForm] = useState({ status: '미분류', memo: '', channelTags: [], audienceProfile: EMPTY_AUDIENCE_PROFILE });
   const [metaTagInput, setMetaTagInput] = useState('');
   const [savingMeta, setSavingMeta] = useState(false);
 
@@ -344,6 +353,7 @@ export default function YouTubeAnalyzer() {
   });
 
   const [statusFilter, setStatusFilter] = useState('전체');
+  const [categoryFilter, setCategoryFilter] = useState('전체');
 
   useEffect(() => { loadChannels(); loadItems(); }, []);
   // 탭/채널 변경 시 페이지·검색 초기화
@@ -378,10 +388,22 @@ export default function YouTubeAnalyzer() {
     }
     // 채널 메타 폼 초기화
     if (ch) {
+      const ap = ch.audienceProfile || {};
       setMetaForm({
         status: ch.status || '미분류',
         memo: ch.memo || '',
         channelTags: ch.channelTags || [],
+        audienceProfile: {
+          category: ap.category || '',
+          age1824: ap.age1824 ?? '',
+          age2534: ap.age2534 ?? '',
+          age3544: ap.age3544 ?? '',
+          age4554: ap.age4554 ?? '',
+          age5564: ap.age5564 ?? '',
+          genderMale: ap.genderMale ?? '',
+          genderFemale: ap.genderFemale ?? '',
+          source: ap.source || '',
+        },
       });
       setMetaTagInput('');
     }
@@ -1681,12 +1703,25 @@ export default function YouTubeAnalyzer() {
                     );
                   })}
                 </div>
+                {/* 카테고리 필터 (시청자 프로필 메뉴에서 입력한 값 기준) */}
+                {(() => {
+                  const cats = [...new Set(channels.map(ch => ch.audienceProfile?.category).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'ko'));
+                  if (cats.length === 0) return null;
+                  return (
+                    <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-blue-500">
+                      <option value="전체">카테고리 전체</option>
+                      {cats.map(c => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  );
+                })()}
               </div>
               <div className="space-y-2 overflow-y-auto" style={{maxHeight:'calc(100vh - 320px)'}}>
                 {(() => {
                   let list = [...channels];
                   if (channelSearch.trim()) list = list.filter(ch => ch.channelName?.toLowerCase().includes(channelSearch.toLowerCase()));
                   if (statusFilter !== '전체') list = list.filter(ch => (ch.status || '미분류') === statusFilter);
+                  if (categoryFilter !== '전체') list = list.filter(ch => ch.audienceProfile?.category === categoryFilter);
                   if (channelSortBy === 'score') list.sort((a,b) => calculateEfficiencyScore(b).total - calculateEfficiencyScore(a).total);
                   else if (channelSortBy === 'subscribers') list.sort((a,b) => (b.subscribers||0) - (a.subscribers||0));
                   else list.sort((a,b) => (a.channelName||'').localeCompare(b.channelName||'', 'ko'));
@@ -1727,6 +1762,9 @@ export default function YouTubeAnalyzer() {
                         </div>
                         <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
                           {st !== '미분류' && <span className={`text-xs px-1.5 py-0.5 rounded-full border ${statusBadge[st] || 'bg-slate-500/20 text-slate-400 border-slate-500/40'}`}>{st}</span>}
+                          {channel.audienceProfile?.category && (
+                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-teal-500/20 text-teal-400 border border-teal-500/40">{channel.audienceProfile.category}</span>
+                          )}
                           {(channel.channelTags || []).slice(0,2).map(tag => (
                             <span key={tag} className="text-xs px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/40">#{tag}</span>
                           ))}
@@ -1829,6 +1867,43 @@ export default function YouTubeAnalyzer() {
                         📝 {selectedChannel.memo}
                       </div>
                     )}
+
+                    {/* 시청자 프로필 요약 (수동 입력된 경우에만 표시) */}
+                    {(() => {
+                      const ap = selectedChannel.audienceProfile;
+                      if (!ap || (!ap.category && ap.age1824 == null && ap.age2534 == null && ap.age3544 == null && ap.age4554 == null && ap.age5564 == null && ap.genderMale == null && ap.genderFemale == null)) return null;
+                      const ageBrackets = [['18-24',ap.age1824],['25-34',ap.age2534],['35-44',ap.age3544],['45-54',ap.age4554],['55-64',ap.age5564]].filter(([,v]) => v != null);
+                      const maxAge = Math.max(1, ...ageBrackets.map(([,v]) => v));
+                      return (
+                        <div className="bg-slate-700/40 border border-teal-700/40 rounded-lg px-4 py-3 mb-4">
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-teal-400 text-xs font-semibold">👥 시청자 프로필{ap.category && ` · ${ap.category}`}</p>
+                            {ap.source && <p className="text-slate-500 text-[11px]">{ap.source}</p>}
+                          </div>
+                          {ageBrackets.length > 0 && (
+                            <div className="flex items-end gap-2 mb-2">
+                              {ageBrackets.map(([label, v]) => (
+                                <div key={label} className="flex-1 text-center">
+                                  <div className="bg-slate-800 rounded overflow-hidden h-12 flex items-end">
+                                    <div className="w-full bg-teal-500/70" style={{ height: `${(v / maxAge) * 100}%` }} />
+                                  </div>
+                                  <p className="text-[10px] text-slate-400 mt-1">{label}</p>
+                                  <p className="text-[10px] text-slate-500">{v}%</p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          {(ap.genderMale != null || ap.genderFemale != null) && (
+                            <div className="flex items-center gap-2 text-xs">
+                              <span className="text-blue-400">남 {ap.genderMale ?? '-'}%</span>
+                              <span className="text-slate-600">·</span>
+                              <span className="text-pink-400">여 {ap.genderFemale ?? '-'}%</span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     <p className="text-slate-400 text-sm mb-4">✨ 최근 10개 롱폼(10분↑) 영상 기준 PPL 분석</p>
                     <div className="grid grid-cols-2 gap-4 mb-6">
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">총 조회수</p><p className="text-2xl font-bold text-white mt-1">{formatKoreanCount(selectedChannel.totalViews)}회</p></div>
@@ -2376,6 +2451,70 @@ export default function YouTubeAnalyzer() {
                             rows={3} placeholder="담당자, 협의 내용, 특이사항 등 자유롭게..."
                             className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none" />
                         </div>
+
+                        {/* 시청자 프로필 (연령대/성별/카테고리) — 수동 입력 전용 */}
+                        <div className="border-t border-slate-700 pt-4">
+                          <div className="flex items-center gap-2 mb-1">
+                            <label className="block text-slate-300 text-sm">👥 시청자 프로필 / 카테고리</label>
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 border border-slate-600">수동 입력</span>
+                          </div>
+                          <p className="text-xs text-slate-500 mb-3">시청자 연령·성별 통계는 채널 소유자만 볼 수 있는 정보라 API로 자동 수집이 불가능합니다. 협업 논의 중 채널 측이 공유한 미디어킷/애널리틱스 캡처를 참고해 직접 입력해두세요.</p>
+
+                          <div className="mb-3">
+                            <label className="block text-slate-400 text-xs mb-1">카테고리</label>
+                            <input list="category-presets" type="text" value={metaForm.audienceProfile.category}
+                              onChange={e => setMetaForm(f => ({...f, audienceProfile: {...f.audienceProfile, category: e.target.value}}))}
+                              placeholder="예: 국내V로그, 육아, 코미디..."
+                              className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-purple-500" />
+                            <datalist id="category-presets">
+                              {CATEGORY_PRESETS.map(c => <option key={c} value={c} />)}
+                            </datalist>
+                          </div>
+
+                          <div className="mb-1 flex items-center justify-between">
+                            <label className="block text-slate-400 text-xs">연령대별 시청자 비율 (%)</label>
+                            {(() => {
+                              const vals = ['age1824','age2534','age3544','age4554','age5564'].map(k => parseFloat(metaForm.audienceProfile[k])).filter(v => !isNaN(v));
+                              if (vals.length === 0) return null;
+                              const sum = vals.reduce((s,v) => s+v, 0);
+                              const ok = sum >= 95 && sum <= 105;
+                              return <span className={`text-xs ${ok ? 'text-slate-500' : 'text-yellow-400'}`}>합계 {sum.toFixed(0)}%{!ok && ' — 100% 확인 필요'}</span>;
+                            })()}
+                          </div>
+                          <div className="grid grid-cols-5 gap-1.5 mb-3">
+                            {[['age1824','18-24'],['age2534','25-34'],['age3544','35-44'],['age4554','45-54'],['age5564','55-64']].map(([key,label]) => (
+                              <div key={key}>
+                                <input type="number" min="0" max="100" value={metaForm.audienceProfile[key]}
+                                  onChange={e => setMetaForm(f => ({...f, audienceProfile: {...f.audienceProfile, [key]: e.target.value}}))}
+                                  placeholder="-"
+                                  className="w-full bg-slate-700 border border-slate-600 rounded px-1.5 py-1.5 text-xs text-white text-center placeholder-slate-500 focus:outline-none focus:border-purple-500" />
+                                <p className="text-center text-[10px] text-slate-500 mt-0.5">{label}</p>
+                              </div>
+                            ))}
+                          </div>
+
+                          <label className="block text-slate-400 text-xs mb-1">성별 시청자 비율 (%)</label>
+                          <div className="grid grid-cols-2 gap-1.5 mb-3">
+                            {[['genderMale','남'],['genderFemale','여']].map(([key,label]) => (
+                              <div key={key} className="flex items-center gap-2">
+                                <input type="number" min="0" max="100" value={metaForm.audienceProfile[key]}
+                                  onChange={e => setMetaForm(f => ({...f, audienceProfile: {...f.audienceProfile, [key]: e.target.value}}))}
+                                  placeholder="-"
+                                  className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-sm text-white text-center placeholder-slate-500 focus:outline-none focus:border-purple-500" />
+                                <span className="text-slate-400 text-xs w-4">{label}</span>
+                              </div>
+                            ))}
+                          </div>
+
+                          <input type="text" value={metaForm.audienceProfile.source}
+                            onChange={e => setMetaForm(f => ({...f, audienceProfile: {...f.audienceProfile, source: e.target.value}}))}
+                            placeholder="근거/출처 (예: 2026.06 미디어킷 기준)"
+                            className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-500" />
+                          {selectedChannel?.audienceProfile?.updatedAt && (
+                            <p className="text-slate-600 text-[10px] mt-1">마지막 입력: {new Date(selectedChannel.audienceProfile.updatedAt).toLocaleDateString('ko-KR')}</p>
+                          )}
+                        </div>
+
                         <button onClick={handleSaveMeta} disabled={savingMeta}
                           className="w-full bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white py-2 rounded transition font-semibold text-sm">
                           {savingMeta ? '저장 중...' : '💾 채널 정보 저장'}
