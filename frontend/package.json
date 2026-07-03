@@ -1,6 +1,6 @@
 {
   "name": "youtube-ppl-analyzer",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "private": true,
   "dependencies": {
     "axios": "^1.6.0",
@@ -13,7 +13,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "REACT_APP_VERSION=$npm_package_version REACT_APP_BUILD_TIME=\"$(date '+%Y.%m.%d %H:%M')\" react-scripts build",
+    "build": "REACT_APP_VERSION=$npm_package_version REACT_APP_BUILD_TIME=\"$(TZ='Asia/Seoul' date '+%Y.%m.%d %H:%M')\" react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
