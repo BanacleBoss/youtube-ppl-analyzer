@@ -630,6 +630,8 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
     channel.country = channelInfo.country;
     channel.channelKeywords = channelInfo.channelKeywords;
     channel.videoCount = channelInfo.videoCount;
+    // 채널 개설일 — 예전에 이 필드가 없던 시절 추가된 채널은 값이 비어있을 수 있으므로 갱신 때마다 채워준다.
+    channel.channelPublishedAt = channelInfo.channelPublishedAt;
     // 전체 영상을 최신 데이터로 교체 (전체 페이지네이션으로 가져오므로 누적 불필요)
     channel.videos = preserveOurCampaignFlags(channel.videos, videos);
     channel.lastUpdated = new Date();
@@ -674,6 +676,7 @@ app.post('/api/channels/refresh-all', async (req, res) => {
         channel.subscribers = channelInfo.subscribers;
         channel.totalViews = channelInfo.totalViews;
         channel.channelName = channelInfo.channelName;
+        channel.channelPublishedAt = channelInfo.channelPublishedAt;
         channel.lastUpdated = new Date();
 
         const pplData = calculatePPLSummary(videos, channel.pplSettings);
@@ -1406,6 +1409,7 @@ async function setupScheduling() {
           channel.videos = preserveOurCampaignFlags(channel.videos, videos);
           channel.subscribers = channelInfo.subscribers;
           channel.totalViews = channelInfo.totalViews;
+          channel.channelPublishedAt = channelInfo.channelPublishedAt;
           channel.lastUpdated = new Date();
 
           const pplData = calculatePPLSummary(videos, channel.pplSettings);
