@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle, Package, Pencil } from 'lucide-react';
-import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog } from './api';
+import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog, getShareLink, revokeShareLink } from './api';
 
 const InfoTooltip = ({ content, children }) => {
   const [showTooltip, setShowTooltip] = useState(false);
@@ -22,7 +22,7 @@ const InfoTooltip = ({ content, children }) => {
 };
 
 // 조회수/구독자 등 큰 숫자를 K/M 대신 한국식 단위(억/만/천)로 표기
-const formatKoreanCount = (num) => {
+export const formatKoreanCount = (num) => {
   if (num === null || num === undefined || isNaN(num)) return '-';
   const n = Number(num);
   const abs = Math.abs(n);
@@ -32,6 +32,199 @@ const formatKoreanCount = (num) => {
   if (abs >= 10000) return sign + fmt(abs / 10000) + '만';
   if (abs >= 1000) return sign + fmt(abs / 1000) + '천';
   return sign + Math.round(abs).toLocaleString();
+};
+
+// ── 아래는 순수 계산 함수들의 모듈 레벨 사본이다 ──
+// 원본은 컴포넌트 내부에도 동일한 이름으로 존재한다(그대로 유지, 내부 스코프가 우선 적용되어 충돌 없음).
+// 공유 링크로 접근하는 PublicSummary 페이지는 이 앱의 전체 상태(state) 없이 독립적으로 렌더링되므로,
+// 여기 모듈 레벨 함수만 import해서 동일한 점수/BEP 계산 로직을 재사용한다(로직 이중 관리 방지).
+export const filterVideos = (videos, type) => {
+  return (videos || []).filter(v => {
+    const duration = v.duration || 0;
+    if (type === 'shorts') return duration <= 60;
+    if (type === 'mid') return duration > 60 && duration <= 600;
+    if (type === 'longform') return duration > 600;
+    return true;
+  });
+};
+
+export const calculateBEP = (s) => {
+  const sellPrice = Number(s.productPrice) || 0;
+  const cost = Number(s.cost) || 0;
+  const shippingCost = Number(s.shippingCost) || 0;
+  const giftCost = Number(s.giftCost) || 0;
+  const pgFeeRate = Number(s.pgFeeRate) || 0;
+  const totalMG = Number(s.totalMG) || 0;
+  const agencyMGShareRate = Number(s.agencyMGShareRate) || 0;
+  const rsRate = Number(s.rsRate) || 0;
+
+  const agencyMGShare = Math.round(totalMG * agencyMGShareRate);
+  const ourMGShare = totalMG - agencyMGShare;
+  const pgFee = sellPrice * pgFeeRate;
+  const rsCost = sellPrice * rsRate;
+  const unitMargin = sellPrice - cost - shippingCost - giftCost - pgFee - rsCost;
+  const bepQty = unitMargin > 0 ? Math.ceil(ourMGShare / unitMargin) : null;
+  const bepRevenue = bepQty ? bepQty * sellPrice : null;
+
+  return { unitMargin: Math.round(unitMargin), agencyMGShare, ourMGShare, bepQty, bepRevenue };
+};
+
+export const calculatePPLRevenueFor = (videos, settings) => {
+  const longformVideos = filterVideos(videos, 'longform');
+  if (!longformVideos || longformVideos.length === 0) {
+    return { avgViews: 0, engagement: 0, expectedClicks: 0, clickRate: null, cpv: null, estimatedQty: 0, expectedRevenue: 0, unitMargin: 0, ourMGShare: 0, netProfit: 0, roi: null, roas: null, riskLevel: '평가 불가' };
+  }
+  const recentVideos = longformVideos.slice(0, 10);
+  const engagement = recentVideos.reduce((sum, v) => sum + (parseFloat(v.engagement) || 0), 0) / recentVideos.length / 100;
+  const avgViews = recentVideos.reduce((sum, v) => sum + (v.views || 0), 0) / recentVideos.length;
+  const expectedClicks = Number(settings.expectedClicks) || 0;
+
+  const estimatedQty = expectedClicks * settings.expectedConversionRate;
+  const expectedRevenue = estimatedQty * settings.productPrice;
+  const clickRate = avgViews > 0 ? (expectedClicks / avgViews * 100) : null;
+  const cpv = avgViews > 0 ? Number((settings.totalMG / avgViews).toFixed(2)) : null;
+
+  const bep = calculateBEP(settings);
+  const netProfit = estimatedQty * bep.unitMargin - bep.ourMGShare;
+  const roi = bep.ourMGShare > 0 ? (netProfit / bep.ourMGShare * 100) : null;
+  const roas = bep.ourMGShare > 0 ? (expectedRevenue / bep.ourMGShare * 100) : null;
+
+  let riskLevel = '평가 불가';
+  if (roi !== null) {
+    if (roi < 0) riskLevel = '높음';
+    else if (roi < 100) riskLevel = '중간';
+    else riskLevel = '낮음';
+  }
+
+  const cpm = cpv !== null ? Math.round(cpv * 1000) : null;
+
+  return {
+    avgViews: Math.round(avgViews),
+    engagement: (engagement * 100).toFixed(2),
+    expectedClicks: Math.round(expectedClicks),
+    clickRate: clickRate !== null ? parseFloat(clickRate.toFixed(2)) : null,
+    cpv,
+    cpm,
+    estimatedQty: Math.round(estimatedQty),
+    expectedRevenue: Math.round(expectedRevenue),
+    unitMargin: bep.unitMargin,
+    ourMGShare: bep.ourMGShare,
+    bepQty: bep.bepQty,
+    netProfit: Math.round(netProfit),
+    roi: roi !== null ? parseFloat(roi.toFixed(2)) : null,
+    roas: roas !== null ? parseFloat(roas.toFixed(2)) : null,
+    riskLevel
+  };
+};
+
+export const calculateViewTrend = (videos) => {
+  const sorted = [...(videos || [])].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
+  const recent = sorted.slice(0, 10);
+  const prev = sorted.slice(10, 20);
+  if (recent.length === 0) return null;
+  const recentAvg = recent.reduce((s, v) => s + (v.views || 0), 0) / recent.length;
+  const prevAvg = prev.length > 0 ? prev.reduce((s, v) => s + (v.views || 0), 0) / prev.length : null;
+  const change = prevAvg ? ((recentAvg - prevAvg) / prevAvg * 100) : null;
+  const chartData = sorted.slice(0, 20).reverse().map((v, i) => ({
+    name: `${i + 1}`,
+    views: v.views || 0,
+    title: v.title
+  }));
+  return {
+    recentAvg: Math.round(recentAvg),
+    prevAvg: prevAvg ? Math.round(prevAvg) : null,
+    change: change !== null ? parseFloat(change.toFixed(1)) : null,
+    chartData
+  };
+};
+
+// 효율 점수 계산 (0~100점) — 인게이지먼트35 + 구독자대비조회수25 + 조회수일관성15 + 업로드주기10 + 광고비율10 + 채널연령5
+export const calculateEfficiencyScore = (channel) => {
+  const videos = channel?.videos || [];
+  const subscribers = channel?.subscribers || 0;
+  const lf = filterVideos(videos, 'longform');
+  const mid = filterVideos(videos, 'mid');
+  const lfSorted = [...lf].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
+  const recentLF = lfSorted.slice(0, 10);
+
+  const engRate = recentLF.length > 0
+    ? recentLF.reduce((s, v) => s + (parseFloat(v.engagement) || 0), 0) / recentLF.length : 0;
+  let engScore = 3;
+  if (engRate >= 5) engScore = 35;
+  else if (engRate >= 3) engScore = 26;
+  else if (engRate >= 1.5) engScore = 17;
+  else if (engRate >= 0.5) engScore = 9;
+
+  const recentAvgViews = recentLF.length > 0
+    ? recentLF.reduce((s, v) => s + (v.views || 0), 0) / recentLF.length : 0;
+  const viewsRatio = subscribers > 0 ? (recentAvgViews / subscribers) * 100 : 0;
+  let viewsScore = 3;
+  if (viewsRatio >= 30) viewsScore = 25;
+  else if (viewsRatio >= 15) viewsScore = 19;
+  else if (viewsRatio >= 5) viewsScore = 12;
+  else if (viewsRatio >= 2) viewsScore = 6;
+
+  let consistencyScore = 3;
+  let cvPercent = null;
+  if (recentLF.length >= 3) {
+    const views = recentLF.map(v => v.views || 0);
+    const mean = views.reduce((s, v) => s + v, 0) / views.length;
+    if (mean > 0) {
+      const variance = views.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / views.length;
+      const cv = Math.sqrt(variance) / mean * 100;
+      cvPercent = Math.round(cv);
+      if (cv <= 30) consistencyScore = 15;
+      else if (cv <= 60) consistencyScore = 11;
+      else if (cv <= 100) consistencyScore = 6;
+    }
+  }
+
+  let uploadScore = 1;
+  const recentDates = recentLF.map(v => new Date(v.uploadDate)).filter(d => !isNaN(d));
+  let avgGapDays = null;
+  if (recentDates.length >= 2) {
+    let totalGap = 0;
+    for (let i = 0; i < recentDates.length - 1; i++)
+      totalGap += (recentDates[i] - recentDates[i + 1]) / (1000 * 60 * 60 * 24);
+    avgGapDays = Math.round(totalGap / (recentDates.length - 1));
+    if (avgGapDays <= 7) uploadScore = 10;
+    else if (avgGapDays <= 14) uploadScore = 8;
+    else if (avgGapDays <= 30) uploadScore = 5;
+  }
+
+  let adScore = 5;
+  const recentAll = [...videos].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate)).slice(0, 20);
+  const adCount = recentAll.filter(v => v.isAd).length;
+  const adRatio = recentAll.length > 0 ? adCount / recentAll.length * 100 : 0;
+  if (adRatio <= 10) adScore = 10;
+  else if (adRatio <= 25) adScore = 7;
+  else if (adRatio <= 40) adScore = 4;
+  else adScore = 1;
+
+  let ageScore = 1;
+  let channelAgeYears = null;
+  if (channel?.channelPublishedAt) {
+    channelAgeYears = (Date.now() - new Date(channel.channelPublishedAt)) / (1000 * 60 * 60 * 24 * 365);
+    if (channelAgeYears >= 5) ageScore = 5;
+    else if (channelAgeYears >= 3) ageScore = 4;
+    else if (channelAgeYears >= 1) ageScore = 2;
+  }
+
+  const total = Math.min(100, engScore + viewsScore + consistencyScore + uploadScore + adScore + ageScore);
+  const longformRatio = (lf.length + mid.length) > 0 ? (lf.length / (lf.length + mid.length) * 100) : 0;
+
+  return {
+    total,
+    details: {
+      engRate: engRate.toFixed(2), engScore,
+      viewsRatio: viewsRatio.toFixed(1), viewsScore,
+      cvPercent, consistencyScore,
+      avgGapDays, uploadScore,
+      adRatio: adRatio.toFixed(1), adScore,
+      channelAgeYears: channelAgeYears ? channelAgeYears.toFixed(1) : null, ageScore,
+      longformRatio: longformRatio.toFixed(1),
+    }
+  };
 };
 
 export default function YouTubeAnalyzer() {
@@ -58,6 +251,8 @@ export default function YouTubeAnalyzer() {
   const [channelSearch, setChannelSearch] = useState('');
   const [channelSortBy, setChannelSortBy] = useState('name'); // name | score | subscribers
   const [portfolioSortBy, setPortfolioSortBy] = useState('score'); // score | subscribers | avgViews | updated
+  const [showSharePanel, setShowSharePanel] = useState(false);
+  const [shareBusy, setShareBusy] = useState(null); // 'external' | 'internal' | null
   const [discoverKeyword, setDiscoverKeyword] = useState('안마기 리뷰');
   const [discoverResults, setDiscoverResults] = useState([]);
   const [discovering, setDiscovering] = useState(false);
@@ -613,6 +808,35 @@ export default function YouTubeAnalyzer() {
     a.download = `채널포트폴리오_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     window.URL.revokeObjectURL(url);
+  };
+
+  // 요약 탭 공유 링크 — 외부용(금액 정보 제외) / 내부용(전체 포함) 두 종류를 독립적으로 발급/비활성화
+  const handleCreateShareLink = async (type) => {
+    if (!selectedChannel) return;
+    setShareBusy(type);
+    try {
+      const { token } = await getShareLink(selectedChannel._id, type);
+      setChannels(channels.map(ch => ch._id === selectedChannel._id ? { ...ch, shareTokens: { ...ch.shareTokens, [type]: token } } : ch));
+    } catch (err) {
+      setError('공유 링크 생성 실패: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setShareBusy(null);
+    }
+  };
+
+  const handleRevokeShareLink = async (type) => {
+    if (!selectedChannel) return;
+    try {
+      await revokeShareLink(selectedChannel._id, type);
+      setChannels(channels.map(ch => ch._id === selectedChannel._id ? { ...ch, shareTokens: { ...ch.shareTokens, [type]: null } } : ch));
+    } catch (err) {
+      setError('공유 링크 비활성화 실패: ' + (err.response?.data?.error || err.message));
+    }
+  };
+
+  const handleCopyShareLink = (token) => {
+    const url = `${window.location.origin}/share/${token}`;
+    navigator.clipboard.writeText(url).then(() => setError('✓ 링크가 클립보드에 복사되었습니다'));
   };
 
   const filterVideos = (videos, type) => {
@@ -1416,13 +1640,50 @@ export default function YouTubeAnalyzer() {
                   <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
                     <div className="flex items-start justify-between gap-3 mb-2">
                       <h2 className="text-2xl font-bold text-white">{selectedChannel.channelName}</h2>
-                      {(() => {
-                        const st = selectedChannel.status || '미분류';
-                        const statusStyle = { '관심':'bg-blue-500/20 text-blue-400 border-blue-500/40', '협의중':'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', '완료':'bg-green-500/20 text-green-400 border-green-500/40', '보류':'bg-red-500/20 text-red-400 border-red-500/40' };
-                        if (st === '미분류') return null;
-                        return <span className={`flex-shrink-0 text-sm px-3 py-1 rounded-full border font-medium ${statusStyle[st]}`}>{st}</span>;
-                      })()}
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {(() => {
+                          const st = selectedChannel.status || '미분류';
+                          const statusStyle = { '관심':'bg-blue-500/20 text-blue-400 border-blue-500/40', '협의중':'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', '완료':'bg-green-500/20 text-green-400 border-green-500/40', '보류':'bg-red-500/20 text-red-400 border-red-500/40' };
+                          if (st === '미분류') return null;
+                          return <span className={`text-sm px-3 py-1 rounded-full border font-medium ${statusStyle[st]}`}>{st}</span>;
+                        })()}
+                        <button onClick={() => setShowSharePanel(!showSharePanel)} className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-3 py-1.5 rounded-full transition">
+                          🔗 공유
+                        </button>
+                      </div>
                     </div>
+
+                    {showSharePanel && (
+                      <div className="bg-slate-900/60 border border-slate-700 rounded-lg p-4 mb-4 space-y-3">
+                        <p className="text-slate-400 text-xs">요약 탭을 로그인 없이 볼 수 있는 읽기 전용 링크입니다. 링크를 아는 사람만 접근할 수 있습니다.</p>
+                        {[
+                          { type: 'external', label: '외부용 링크', desc: '구독자·조회수·효율점수 등 채널 지표만 (MG/ROI 등 금액 정보 제외)' },
+                          { type: 'internal', label: '내부용 링크', desc: 'MG·BEP·ROI 등 PPL 매출 분석까지 전체 포함' },
+                        ].map(({ type, label, desc }) => {
+                          const token = selectedChannel.shareTokens?.[type];
+                          return (
+                            <div key={type} className="bg-slate-800 rounded-lg p-3">
+                              <div className="flex items-center justify-between gap-2 mb-1">
+                                <p className="text-white text-sm font-semibold">{label}</p>
+                                {!token ? (
+                                  <button onClick={() => handleCreateShareLink(type)} disabled={shareBusy === type} className="text-xs bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1 rounded transition">
+                                    {shareBusy === type ? '생성 중...' : '링크 만들기'}
+                                  </button>
+                                ) : (
+                                  <div className="flex gap-1.5">
+                                    <button onClick={() => handleCopyShareLink(token)} className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-3 py-1 rounded transition">복사</button>
+                                    <button onClick={() => handleRevokeShareLink(type)} className="text-xs bg-red-900/60 hover:bg-red-800 text-red-200 px-3 py-1 rounded transition">비활성화</button>
+                                  </div>
+                                )}
+                              </div>
+                              <p className="text-slate-500 text-xs">{desc}</p>
+                              {token && <p className="text-blue-400 text-xs mt-1.5 break-all">{window.location.origin}/share/{token}</p>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
                     {selectedChannel.channelTags?.length > 0 && (
                       <div className="flex gap-1.5 flex-wrap mb-2">
                         {selectedChannel.channelTags.map(tag => (

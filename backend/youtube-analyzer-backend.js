@@ -5,6 +5,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const ExcelJS = require('exceljs');
+const crypto = require('crypto');
 require('dotenv').config();
 
 // 필수 환경변수 누락 시 서버가 원인 불명의 에러로 조용히 실패하는 대신 명확히 알린다.
@@ -107,6 +108,13 @@ const channelSchema = new mongoose.Schema({
   status: { type: String, enum: ['관심', '협의중', '완료', '보류', '미분류'], default: '미분류' },
   memo: { type: String, default: '' },
   channelTags: [{ type: String }],
+
+  // 요약 탭 공유 링크 — 토큰을 아는 사람만 읽기 전용으로 조회 가능
+  // external: 채널 지표만 (MG/ROI 등 금액 정보 제외), internal: PPL 딜 조건까지 전체 포함
+  shareTokens: {
+    external: { type: String, default: null },
+    internal: { type: String, default: null }
+  },
 
   // 일일 누적 통계
   dailyStats: [{
@@ -801,6 +809,88 @@ app.delete('/api/channels/:channelId/campaign-logs/:logId', async (req, res) => 
 
     await channel.save();
     res.json(channel);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ===== 요약 탭 공유 링크 API =====
+// 외부에 공유할 때 로그인 없이도 요약 지표를 볼 수 있도록, 채널 ID 대신 추측 불가능한
+// 토큰으로 접근하는 읽기 전용 공개 조회 경로를 별도로 둔다.
+// external: 구독자/조회수/효율점수 등 채널 지표만 (MG 비용·ROI 등 금액 정보 제외)
+// internal: PPL 매출 분석(MG/BEP/ROI 등)까지 전체 포함
+
+// POST: 공유 링크 생성 (이미 있으면 기존 토큰을 그대로 반환 — 재생성 시 링크가 바뀌지 않도록)
+app.post('/api/channels/:id/share', async (req, res) => {
+  try {
+    const { type } = req.body || {};
+    if (!['external', 'internal'].includes(type)) {
+      return res.status(400).json({ error: 'type은 external 또는 internal 이어야 합니다' });
+    }
+    const channel = await Channel.findById(req.params.id);
+    if (!channel) return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
+
+    if (!channel.shareTokens) channel.shareTokens = {};
+    if (!channel.shareTokens[type]) {
+      channel.shareTokens[type] = crypto.randomBytes(16).toString('hex');
+      channel.markModified('shareTokens');
+      await channel.save();
+    }
+    res.json({ type, token: channel.shareTokens[type] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE: 공유 링크 비활성화 (링크가 유출됐을 때 즉시 차단하는 용도)
+app.delete('/api/channels/:id/share/:type', async (req, res) => {
+  try {
+    const { type } = req.params;
+    if (!['external', 'internal'].includes(type)) {
+      return res.status(400).json({ error: 'type은 external 또는 internal 이어야 합니다' });
+    }
+    const channel = await Channel.findById(req.params.id);
+    if (!channel) return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
+
+    if (channel.shareTokens) {
+      channel.shareTokens[type] = null;
+      channel.markModified('shareTokens');
+      await channel.save();
+    }
+    res.json({ type, token: null });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET: 토큰으로 공개 요약 데이터 조회 (인증 없이 접근 가능 — 토큰 자체가 비밀키 역할)
+app.get('/api/public/summary/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const channel = await Channel.findOne({
+      $or: [{ 'shareTokens.external': token }, { 'shareTokens.internal': token }]
+    });
+    if (!channel) {
+      return res.status(404).json({ error: '유효하지 않거나 만료된 링크입니다' });
+    }
+    const mode = channel.shareTokens?.external === token ? 'external' : 'internal';
+
+    const payload = {
+      mode,
+      channelName: channel.channelName,
+      subscribers: channel.subscribers,
+      totalViews: channel.totalViews,
+      country: channel.country,
+      channelPublishedAt: channel.channelPublishedAt,
+      videos: channel.videos,
+      dailyStats: channel.dailyStats
+    };
+    if (mode === 'internal') {
+      payload.status = channel.status;
+      payload.channelTags = channel.channelTags;
+      payload.pplSettings = channel.pplSettings;
+    }
+    res.json(payload);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -69,4 +69,20 @@ export const deleteCampaignLog = async (channelId, logId) => {
   return response.data;
 };
 
+// 요약 탭 공유 링크
+export const getShareLink = async (channelId, type) => {
+  const response = await api.post(`/channels/${channelId}/share`, { type });
+  return response.data; // { type, token }
+};
+
+export const revokeShareLink = async (channelId, type) => {
+  const response = await api.delete(`/channels/${channelId}/share/${type}`);
+  return response.data;
+};
+
+export const getPublicSummary = async (token) => {
+  const response = await api.get(`/public/summary/${token}`);
+  return response.data;
+};
+
 export default api;
