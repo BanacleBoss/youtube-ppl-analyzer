@@ -1359,7 +1359,7 @@ export default function YouTubeAnalyzer() {
                     const badgeColor = eff.total >= 75 ? 'bg-green-500/20 text-green-400 border-green-500/40' : eff.total >= 50 ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40' : 'bg-red-500/20 text-red-400 border-red-500/40';
                     const st = channel.status || '미분류';
                     return (
-                      <div key={channel._id} onClick={() => setSelectedChannelId(channel._id)} className={`p-3.5 rounded-xl border cursor-pointer transition-all ${selectedChannelId === channel._id ? 'bg-blue-950/60 border-blue-500 ring-1 ring-blue-500/50 shadow-lg shadow-blue-900/20' : 'bg-slate-800/80 border-slate-700/80 hover:border-slate-600 hover:bg-slate-800'}`}>
+                      <div key={channel._id} onClick={() => setSelectedChannelId(prev => prev === channel._id ? null : channel._id)} className={`p-3.5 rounded-xl border cursor-pointer transition-all ${selectedChannelId === channel._id ? 'bg-blue-950/60 border-blue-500 ring-1 ring-blue-500/50 shadow-lg shadow-blue-900/20' : 'bg-slate-800/80 border-slate-700/80 hover:border-slate-600 hover:bg-slate-800'}`}>
                         <div className="flex items-center gap-3 mb-2">
                           {compareMode && (
                             <input type="checkbox" checked={compareChannelIds.includes(channel._id)} onChange={e => { e.stopPropagation(); toggleCompareChannel(channel._id); }} className="w-4 h-4 accent-orange-500 flex-shrink-0 cursor-pointer" />
