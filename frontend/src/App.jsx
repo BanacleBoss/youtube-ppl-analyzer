@@ -1337,37 +1337,8 @@ export default function YouTubeAnalyzer() {
       body: `${adText} ${lfPplText}`
     });
 
-    // ── 4. 적정 협업 조건 제안 (광고비/RS) ──
-    // MG(최소보장금)는 매출과 무관하게 나가는 고정비라, 인게이지먼트가 아무리 좋아도
-    // 실제 판매가 기대에 못 미치면 그 차액은 그대로 손실로 남는다.
-    // 채널 규모(평균 조회수)와 효율 점수를 반영해 리스크가 관리되는 수준의 광고비/RS 구간을 제안한다.
-    const avgViewsForBudget = calculatePPLRevenue(videos).avgViews;
-    let mgLow, mgHigh, rsLow, rsHigh;
-    if (avgViewsForBudget < 5000) { mgLow = 50; mgHigh = 100; rsLow = 35; rsHigh = 45; }
-    else if (avgViewsForBudget < 20000) { mgLow = 100; mgHigh = 200; rsLow = 30; rsHigh = 40; }
-    else if (avgViewsForBudget < 50000) { mgLow = 200; mgHigh = 400; rsLow = 25; rsHigh = 35; }
-    else if (avgViewsForBudget < 150000) { mgLow = 400; mgHigh = 800; rsLow = 20; rsHigh = 30; }
-    else if (avgViewsForBudget < 400000) { mgLow = 800; mgHigh = 1500; rsLow = 15; rsHigh = 25; }
-    else { mgLow = 1500; mgHigh = 3000; rsLow = 10; rsHigh = 20; }
-
-    let dealRiskNote;
-    if (eff.total < 40) {
-      dealRiskNote = `효율 점수가 낮아 판매 성과를 예측하기 어려운 채널입니다. MG 방식보다는 공동구매(RS) 방식으로 진행해 다운사이드 리스크를 낮추거나, MG로 진행하더라도 제안 범위 하단(${mgLow}만원 수준)으로 최소화하는 것을 권장합니다.`;
-    } else if (eff.total < 55) {
-      dealRiskNote = `효율 점수가 중간 수준이라 MG는 제안 범위 하단을 우선 검토하고, 실적을 확인한 뒤 다음 캠페인에서 상향하는 방식을 권장합니다.`;
-    } else if (eff.total < 75) {
-      dealRiskNote = `효율 점수가 양호한 편이라 제안 범위 내에서 MG 방식과 공동구매(RS) 방식 모두 무난하게 진행할 수 있습니다.`;
-    } else {
-      dealRiskNote = `효율 점수가 높아 제안 범위 상단까지도 안정적으로 회수될 가능성이 높은 채널입니다.`;
-    }
-    sections.push({
-      title: '💰 적정 협업 조건 제안',
-      body: `평균 조회수(${formatKoreanCount(avgViewsForBudget)}회) 기준으로 브랜디드 PPL 적정 광고비(MG)는 약 ${mgLow}~${mgHigh}만원, 공동구매로 진행할 경우 RS ${rsLow}~${rsHigh}% 수준을 제안합니다. ` +
-        `MG는 매출과 무관하게 고정으로 나가는 비용이라, 인게이지먼트가 아무리 좋아도 실제 판매가 기대에 못 미치면 그 차액은 고스란히 손실로 남습니다. ${dealRiskNote} ` +
-        `(※ 조회수 기준의 참고용 범위이며, 실제 제품 마진과 캠페인 목표에 맞춰 조정하세요.)`
-    });
-
-    // ── 5. 제품 핏 분석 (헬스케어/마사지기) ──
+    // ── 4. 제품 핏 분석 (헬스케어/마사지기) ──
+    // 적정 협업 조건(아래 5번) 계산에서 이 fitLevel을 가장 큰 변수로 쓰기 때문에 먼저 계산한다.
     const channelName = channel.channelName || '';
     const keywords = (channel.channelKeywords || []).join(' ').toLowerCase();
     const healthKeywords = ['건강', '헬스', '운동', '마사지', '피로', '스트레칭', '몸관리', '홈케어', '다이어트', '웰니스', '라이프스타일', '일상'];
@@ -1392,6 +1363,63 @@ export default function YouTubeAnalyzer() {
     sections.push({
       title: `🛍️ 제품 핏 분석 (헬스케어/마사지기) — ${fitLevel}`,
       body: fitText
+    });
+
+    // ── 5. 적정 협업 조건 제안 (광고비/RS) ──
+    // 조회수 구간만으로 나누면 채널마다 다 똑같은 문구가 나오는 "일률적인" 결과가 되므로,
+    // 정량 요소(효율 점수)와 정성 요소(제품 핏·트렌드·광고피로도·구매의도 댓글)를 곱셈 배수로 반영해
+    // 채널별로 실제로 차별화된 숫자와 코멘트가 나오게 한다.
+    //  - 품목이 실제로 등록돼 있으면(itemId 존재) 그 품목의 실제 마진(BEP)에서 "회수 가능한 마진"을 역산 — 가장 신뢰도 높은 방식
+    //  - 품목이 없으면 조회수 × 참고 단가로 대략치를 내고, 근거가 약하다는 점을 문구에 명시
+    // MG(최소보장금)는 매출과 무관하게 나가는 고정비라, 인게이지먼트가 아무리 좋아도
+    // 실제 판매가 기대에 못 미치면 그 차액은 그대로 손실로 남는다 — 이 구조적 리스크는 항상 언급한다.
+    const avgViewsForBudget = calculatePPLRevenue(videos).avgViews;
+
+    const qualityMultiplier = 0.6 + (eff.total / 100) * 0.8; // 효율 0점→0.6배, 100점→1.4배
+    const fitMultiplier = fitLevel === '높음' ? 1.25 : fitLevel === '중간' ? 0.9 : 0.55;
+    const trendMultiplier = trend?.change > 10 ? 1.1 : trend?.change < -10 ? 0.85 : 1.0;
+    const adFatigueMultiplier = adRatioVal > 25 ? 0.9 : 1.0;
+    const purchaseIntentMultiplier = (ca?.purchaseIntentRatio ?? 0) >= 0.1 ? 1.15 : 1.0;
+    const combinedMultiplier = qualityMultiplier * fitMultiplier * trendMultiplier * adFatigueMultiplier * purchaseIntentMultiplier;
+
+    const hasRealItem = !!settings.itemId;
+    const dealBep = hasRealItem ? calculateBEP(settings) : null;
+    let centerMG, basisText, marginWarning = '';
+    if (hasRealItem) {
+      const assumedClicks = settings.expectedClicks > 0 ? settings.expectedClicks : avgViewsForBudget * 0.005;
+      const assumedConv = settings.expectedConversionRate || 0.03;
+      const conservativeQty = assumedClicks * assumedConv;
+      const recoverableMargin = Math.max(0, conservativeQty * dealBep.unitMargin);
+      centerMG = Math.round(recoverableMargin * combinedMultiplier / 10000);
+      basisText = `등록된 품목(${settings.itemName || '현재 품목'}) 마진 기준, 예상 판매수량 ${Math.round(conservativeQty).toLocaleString()}개에서 회수 가능한 마진을 역산한 값입니다.`;
+      if (dealBep.unitMargin <= 0) {
+        marginWarning = ` 다만 현재 등록된 원가·판매가 기준으로는 개당 기여마진이 0원 이하라, MG를 얼마로 잡든 판매만으로는 회수가 불가능한 구조입니다. 원가나 판매가부터 재검토가 필요합니다.`;
+      }
+    } else {
+      const baseCPV = 70; // 원/회 — 실측치가 아닌 참고 단가. 품목 등록 시 실제 마진 기반 계산으로 대체됨
+      centerMG = Math.round(avgViewsForBudget * baseCPV * combinedMultiplier / 10000);
+      basisText = `아직 등록된 품목 마진 정보가 없어 조회수 기반 참고 단가(약 ${baseCPV}원/회)로 추정한 값입니다. 품목을 등록하면 실제 마진 기준으로 더 정확하게 계산됩니다.`;
+    }
+    centerMG = Math.max(30, centerMG);
+    const mgLow = Math.round(centerMG * 0.8 / 10) * 10;
+    const mgHigh = Math.round(centerMG * 1.2 / 10) * 10;
+
+    const centerRS = Math.min(45, Math.max(10, Math.round(25 / combinedMultiplier)));
+    const rsLow = Math.max(5, centerRS - 5);
+    const rsHigh = Math.min(50, centerRS + 5);
+
+    let fitWarning = '';
+    if (fitLevel === '낮음') {
+      fitWarning = ` 채널 자체 지표는 나쁘지 않지만 제품 연관성이 낮게 평가돼 실제 전환은 기대치보다 낮을 수 있으니, 제안 범위 하단을 기준으로 협상하고 공동구매(RS) 비중을 높이는 것을 권장합니다.`;
+    } else if (fitLevel === '높음') {
+      fitWarning = ` 제품 연관성도 높게 평가된 채널이라 제안 범위 상단도 노려볼 만합니다.`;
+    }
+
+    sections.push({
+      title: '💰 적정 협업 조건 제안',
+      body: `브랜디드 PPL 적정 광고비(MG)는 약 ${mgLow}~${mgHigh}만원, 공동구매로 진행할 경우 RS ${rsLow}~${rsHigh}% 수준을 제안합니다. ${basisText} ` +
+        `MG는 매출과 무관하게 고정으로 나가는 비용이라, 인게이지먼트가 아무리 좋아도 실제 판매가 기대에 못 미치면 그 차액은 고스란히 손실로 남습니다.${marginWarning}${fitWarning} ` +
+        `(※ 참고용 제안 범위이며, 실제 협상 시 캠페인 목표와 채널 상황에 맞춰 조정하세요.)`
     });
 
     // ── 6. 댓글 분석 요약 (있을 때만) ──
