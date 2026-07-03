@@ -1704,7 +1704,19 @@ export default function YouTubeAnalyzer() {
                           {compareMode && (
                             <input type="checkbox" checked={compareChannelIds.includes(channel._id)} onChange={e => { e.stopPropagation(); toggleCompareChannel(channel._id); }} className="w-4 h-4 accent-orange-500 flex-shrink-0 cursor-pointer" />
                           )}
-                          <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${selectedChannelId === channel._id ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300'}`}>
+                          {channel.channelThumbnail ? (
+                            <img
+                              src={channel.channelThumbnail}
+                              alt={channel.channelName}
+                              className={`w-9 h-9 rounded-full flex-shrink-0 object-cover ${selectedChannelId === channel._id ? 'ring-2 ring-blue-500' : ''}`}
+                              // 썸네일 URL이 만료/차단되는 드문 경우, 이미지 대신 이니셜 원으로 안전하게 대체한다.
+                              onError={e => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
+                            />
+                          ) : null}
+                          <div
+                            className={`w-9 h-9 rounded-full items-center justify-center text-sm font-bold flex-shrink-0 ${selectedChannelId === channel._id ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300'}`}
+                            style={{ display: channel.channelThumbnail ? 'none' : 'flex' }}
+                          >
                             {channel.channelName?.charAt(0) || '?'}
                           </div>
                           <div className="min-w-0 flex-1">

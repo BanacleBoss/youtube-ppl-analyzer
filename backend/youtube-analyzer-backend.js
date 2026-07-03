@@ -81,6 +81,7 @@ const searchCache = new Map();
 const channelSchema = new mongoose.Schema({
   channelId: String,
   channelName: String,
+  channelThumbnail: { type: String, default: '' }, // 채널 목록에 실제 유튜브 프로필 사진을 보여주기 위한 썸네일 URL
   subscribers: Number,
   totalViews: Number,
   
@@ -347,6 +348,7 @@ function preserveOurCampaignFlags(oldVideos, newVideos) {
 function applyChannelRefresh(channel, channelInfo, videos) {
   channel.videos = preserveOurCampaignFlags(channel.videos, videos);
   channel.channelName = channelInfo.channelName;
+  channel.channelThumbnail = channelInfo.channelThumbnail;
   channel.subscribers = channelInfo.subscribers;
   channel.totalViews = channelInfo.totalViews;
   channel.country = channelInfo.country;
@@ -436,9 +438,11 @@ class YouTubeAnalyzer {
 
       const channel = response.data.items[0];
       const keywordsRaw = channel.brandingSettings?.channel?.keywords || '';
+      const thumbnails = channel.snippet.thumbnails || {};
       return {
         channelId: channel.id,
         channelName: channel.snippet.title,
+        channelThumbnail: thumbnails.medium?.url || thumbnails.default?.url || '',
         subscribers: parseInt(channel.statistics.subscriberCount || 0),
         totalViews: parseInt(channel.statistics.viewCount || 0),
         country: channel.snippet.country || '',
@@ -581,6 +585,7 @@ app.post('/api/channels', async (req, res) => {
     const channel = new Channel({
       channelId: channelInfo.channelId,
       channelName: channelInfo.channelName,
+      channelThumbnail: channelInfo.channelThumbnail,
       subscribers: channelInfo.subscribers,
       totalViews: channelInfo.totalViews,
       country: channelInfo.country,
