@@ -867,48 +867,48 @@ export default function YouTubeAnalyzer() {
   };
 
   // 브랜디드 PPL/기획 PPL/공동구매/협업 제안 메일 초안 생성
-  // — PPL 제안서(PDF)는 데이터 위주의 문서이고, 이건 담당자에게 그대로 붙여넣을 수 있는 메일 본문(대화체)이다.
-  // 채널 종합 총평에서 이미 만들어둔 문장들을 재활용해 "왜 이 채널을 골랐는지"를 근거 있게 채워 넣는다.
+  // — 크리에이터 입장에서 볼 때 "나를 숫자로 평가해서 보낸 스팸"처럼 느껴지면 회신율이 떨어진다.
+  // 그래서 인게이지먼트율·CV·예상매출 같은 우리 내부 분석 수치는 메일 본문에서 전부 뺐다.
+  // (그런 숫자는 우리가 채널을 고르는 데 참고하는 것이지, 크리에이터에게 "당신을 분석했다"고 티 낼 이유가 없다.)
+  // 대신 진짜 개인화 포인트(최근 영상 인상 깊었던 부분 등)는 사람이 직접 채워 넣도록 자리만 비워두고,
+  // 나머지는 짧고 담백한 대화체로 구성해 부담 없이 회신할 수 있게 만든다.
   const buildProposalEmailDraft = (channel, form) => {
-    const ppl = calculatePPLRevenue(channel.videos);
-    const assessment = generateChannelAssessment(channel);
-    const findSection = (keyword) => assessment.find(s => s.title.includes(keyword))?.body || '';
+    const videos = channel.videos || [];
+    const lf = filterVideos(videos, 'longform');
+    const mid = filterVideos(videos, 'mid');
+    const shorts = filterVideos(videos, 'shorts');
+    const totalVids = videos.length;
+    const lfRatio = totalVids > 0 ? lf.length / totalVids * 100 : 0;
+    const contentFocusHint = lfRatio >= 60
+      ? '롱폼 위주로 꾸준히 올리시는 점'
+      : shorts.length > lf.length + mid.length
+      ? '숏폼을 활발하게 올리시는 점'
+      : '다양한 포맷으로 콘텐츠를 만드시는 점';
 
     const brand = form.brandName?.trim() || '[브랜드명]';
     const sender = form.senderName?.trim() || '[담당자명]';
     const productLabel = form.productName?.trim() || '[제품/서비스명]';
-    const subsText = formatKoreanCount(channel.subscribers) + '명';
-
-    const reasons = [findSection('시청자 반응'), findSection('PPL 친화도'), findSection('제품 핏'), findSection('댓글 품질')].filter(Boolean);
-    const hasEstimate = ppl.estimatedQty > 0 && ppl.expectedRevenue > 0;
 
     const lines = [];
-    lines.push(`제목: [${brand}] ${productLabel} 협업 제안 드립니다 – ${channel.channelName}님`);
+    lines.push(`제목: ${channel.channelName}님과 협업하고 싶어요 (${brand})`);
     lines.push('');
-    lines.push(`안녕하세요, ${brand} ${sender}입니다.`);
+    lines.push(`안녕하세요, ${channel.channelName}님!`);
+    lines.push(`${brand} ${sender}입니다.`);
     lines.push('');
-    lines.push(`${channel.channelName} 채널을 즐겨 보다가, 구독자 ${subsText} 규모와 채널 색깔이 저희 ${productLabel}와 잘 맞을 것 같아 이렇게 연락드리게 되었습니다.`);
+    lines.push(`평소 채널 잘 보고 있었는데, [여기에 최근 영상 중 인상 깊었던 부분을 1~2문장으로 직접 적어주세요 — 예: "${contentFocusHint}이 인상 깊었어요"] 그래서 저희 ${productLabel}와도 잘 어울릴 것 같아 연락드리게 됐어요.`);
     lines.push('');
-    lines.push(`이번에 협업을 제안드리고 싶습니다. [여기에 제품/캠페인 소개를 2~3문장으로 넣어주세요]`);
+    lines.push(`이번에 ${productLabel}로 협업을 제안드리고 싶습니다. [여기에 제품/캠페인 소개를 1~2문장으로 넣어주세요]`);
     lines.push('');
-    if (reasons.length > 0) {
-      lines.push(`${channel.channelName} 채널에 제안드리는 이유는 다음과 같습니다.`);
-      reasons.forEach(r => lines.push(`- ${r}`));
-      lines.push('');
-    }
-    lines.push('협업은 아래와 같이 다양한 방식으로 가능하며, 채널 성격에 맞는 방향으로 자유롭게 제안 주셔도 좋습니다.');
-    lines.push('- 브랜디드 PPL: 기존에 하시던 콘텐츠 포맷에 제품을 자연스럽게 녹이는 방식');
-    lines.push('- 기획 PPL: 브랜드와 크리에이터가 함께 스토리라인/컨셉을 기획해 새로 제작하는 방식');
-    lines.push('- 공동구매(RS, 매출 이익 공유): 판매 성과에 따라 수익을 나누는 방식');
-    lines.push('- 이 외에도 채널에 맞는 다른 형태의 협업이면 무엇이든 편하게 제안 주세요');
-    if (hasEstimate) {
-      lines.push(`- 참고로 저희 쪽 자체 추정 기준 예상 판매수량 ${ppl.estimatedQty.toLocaleString()}개, 예상 매출 ${ppl.expectedRevenue.toLocaleString()}원입니다 (실제 성과는 캠페인 진행 방식에 따라 달라질 수 있습니다)`);
-    }
-    lines.push('- MG/RS 등 구체적인 조건은 회신 주시면 상세히 안내드리겠습니다');
+    lines.push(`진행 방식은 정해두지 않았고, ${channel.channelName}님 채널 색깔에 맞게 편하신 방향으로 진행하면 돼요.`);
+    lines.push('- 원래 하시던 콘텐츠에 자연스럽게 녹이는 방식 (브랜디드 PPL)');
+    lines.push('- 저희와 함께 컨셉/스토리라인을 같이 짜보는 방식 (기획 PPL)');
+    lines.push('- 판매 성과에 따라 수익을 나누는 공동구매(RS) 방식');
+    lines.push('- 이 외에 편하신 다른 방식이 있다면 그것도 좋아요, 편하게 제안해 주세요');
     lines.push('');
-    lines.push('관심 있으시면 편하신 시간에 회신 부탁드립니다. 통화나 미팅으로 자세한 내용 안내드리겠습니다.');
+    lines.push('원고료·제품 제공·RS 조건 등은 채널 상황에 맞춰 편하게 협의하고 싶습니다.');
+    lines.push('관심 있으시면 편하실 때 답장 주세요. 통화도 좋고, 메일로 편하게 이야기 나눠도 좋습니다.');
     lines.push('');
-    lines.push('감사합니다.');
+    lines.push('감사합니다!');
     lines.push('');
     lines.push(`${sender} 드림`);
     lines.push(brand);
@@ -1337,7 +1337,37 @@ export default function YouTubeAnalyzer() {
       body: `${adText} ${lfPplText}`
     });
 
-    // ── 4. 제품 핏 분석 (헬스케어/마사지기) ──
+    // ── 4. 적정 협업 조건 제안 (광고비/RS) ──
+    // MG(최소보장금)는 매출과 무관하게 나가는 고정비라, 인게이지먼트가 아무리 좋아도
+    // 실제 판매가 기대에 못 미치면 그 차액은 그대로 손실로 남는다.
+    // 채널 규모(평균 조회수)와 효율 점수를 반영해 리스크가 관리되는 수준의 광고비/RS 구간을 제안한다.
+    const avgViewsForBudget = calculatePPLRevenue(videos).avgViews;
+    let mgLow, mgHigh, rsLow, rsHigh;
+    if (avgViewsForBudget < 5000) { mgLow = 50; mgHigh = 100; rsLow = 35; rsHigh = 45; }
+    else if (avgViewsForBudget < 20000) { mgLow = 100; mgHigh = 200; rsLow = 30; rsHigh = 40; }
+    else if (avgViewsForBudget < 50000) { mgLow = 200; mgHigh = 400; rsLow = 25; rsHigh = 35; }
+    else if (avgViewsForBudget < 150000) { mgLow = 400; mgHigh = 800; rsLow = 20; rsHigh = 30; }
+    else if (avgViewsForBudget < 400000) { mgLow = 800; mgHigh = 1500; rsLow = 15; rsHigh = 25; }
+    else { mgLow = 1500; mgHigh = 3000; rsLow = 10; rsHigh = 20; }
+
+    let dealRiskNote;
+    if (eff.total < 40) {
+      dealRiskNote = `효율 점수가 낮아 판매 성과를 예측하기 어려운 채널입니다. MG 방식보다는 공동구매(RS) 방식으로 진행해 다운사이드 리스크를 낮추거나, MG로 진행하더라도 제안 범위 하단(${mgLow}만원 수준)으로 최소화하는 것을 권장합니다.`;
+    } else if (eff.total < 55) {
+      dealRiskNote = `효율 점수가 중간 수준이라 MG는 제안 범위 하단을 우선 검토하고, 실적을 확인한 뒤 다음 캠페인에서 상향하는 방식을 권장합니다.`;
+    } else if (eff.total < 75) {
+      dealRiskNote = `효율 점수가 양호한 편이라 제안 범위 내에서 MG 방식과 공동구매(RS) 방식 모두 무난하게 진행할 수 있습니다.`;
+    } else {
+      dealRiskNote = `효율 점수가 높아 제안 범위 상단까지도 안정적으로 회수될 가능성이 높은 채널입니다.`;
+    }
+    sections.push({
+      title: '💰 적정 협업 조건 제안',
+      body: `평균 조회수(${formatKoreanCount(avgViewsForBudget)}회) 기준으로 브랜디드 PPL 적정 광고비(MG)는 약 ${mgLow}~${mgHigh}만원, 공동구매로 진행할 경우 RS ${rsLow}~${rsHigh}% 수준을 제안합니다. ` +
+        `MG는 매출과 무관하게 고정으로 나가는 비용이라, 인게이지먼트가 아무리 좋아도 실제 판매가 기대에 못 미치면 그 차액은 고스란히 손실로 남습니다. ${dealRiskNote} ` +
+        `(※ 조회수 기준의 참고용 범위이며, 실제 제품 마진과 캠페인 목표에 맞춰 조정하세요.)`
+    });
+
+    // ── 5. 제품 핏 분석 (헬스케어/마사지기) ──
     const channelName = channel.channelName || '';
     const keywords = (channel.channelKeywords || []).join(' ').toLowerCase();
     const healthKeywords = ['건강', '헬스', '운동', '마사지', '피로', '스트레칭', '몸관리', '홈케어', '다이어트', '웰니스', '라이프스타일', '일상'];
@@ -1364,7 +1394,7 @@ export default function YouTubeAnalyzer() {
       body: fitText
     });
 
-    // ── 5. 댓글 분석 요약 (있을 때만) ──
+    // ── 6. 댓글 분석 요약 (있을 때만) ──
     if (ca?.qualityScore != null) {
       const purchaseRate = (ca.purchaseIntentRatio * 100).toFixed(1);
       const negRate = (ca.negativeRatio * 100).toFixed(1);
@@ -1376,7 +1406,7 @@ export default function YouTubeAnalyzer() {
       sections.push({ title: '💬 댓글 품질 요약', body: commentText });
     }
 
-    // ── 6. 종합 의견 ──
+    // ── 7. 종합 의견 ──
     const score = eff.total;
     let recommendation = '';
     let recColor = '';
@@ -2917,7 +2947,7 @@ export default function YouTubeAnalyzer() {
                     {/* 제안 메일 초안 */}
                     <div className="bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border border-emerald-600/50 rounded-lg p-4 mb-2">
                       <h4 className="text-white font-bold mb-1">📧 제안 메일 초안 생성</h4>
-                      <p className="text-emerald-200/70 text-xs mb-3">채널 분석 데이터를 반영해 담당자에게 바로 보낼 수 있는 제안 메일 본문을 만듭니다. 브랜디드 PPL·기획 PPL·공동구매(RS)·기타 협업 방식을 모두 안내하는 내용으로 자동 구성됩니다.</p>
+                      <p className="text-emerald-200/70 text-xs mb-3">분석 수치를 나열하지 않고, 크리에이터가 부담 없이 회신하고 싶어질 만한 짧고 담백한 톤으로 초안을 만듭니다. 브랜디드 PPL·기획 PPL·공동구매(RS)·기타 협업 방식을 자연스럽게 안내합니다. 대괄호 부분에 진짜 개인화 멘트만 채워 넣으면 완성이에요.</p>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
                         <input type="text" placeholder="브랜드/회사명" value={proposalEmailForm.brandName} onChange={e => setProposalEmailForm({...proposalEmailForm, brandName: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
                         <input type="text" placeholder="발신자명" value={proposalEmailForm.senderName} onChange={e => setProposalEmailForm({...proposalEmailForm, senderName: e.target.value})} className="bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
