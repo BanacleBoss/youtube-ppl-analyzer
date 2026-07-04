@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle, Package, Pencil, Camera } from 'lucide-react';
 import html2canvas from 'html2canvas';
-import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog, getShareLink, revokeShareLink, setVideoCampaignFlag, updateSettingsHistory, deleteSettingsHistory, getSetupStatus, setupAdmin, login, getMe, getUsers, createUser, setUnauthorizedHandler } from './api';
+import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog, getShareLink, revokeShareLink, setVideoCampaignFlag, updateSettingsHistory, deleteSettingsHistory, getSetupStatus, setupAdmin, login, getUsers, createUser, setUnauthorizedHandler } from './api';
 
 // 시청자 프로필(연령대/성별/카테고리) 폼의 빈 상태. YouTube 공개 API는 채널 소유자 본인이 아니면
 // 시청자 연령/성별 통계를 절대 내주지 않으므로(그건 채널 주인의 OAuth 동의가 필요한 YouTube Analytics
@@ -501,8 +501,10 @@ export default function YouTubeAnalyzer() {
   };
 
   // 로그인 완료 후에만 채널/품목을 불러온다 (로그인 전에 호출하면 401만 반복될 뿐이다).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (authState === 'ready') { loadChannels(viewingOwner?.id); loadItems(); } }, [authState]);
   // 팀원 목록에서 다른 사람 이름을 클릭해 보는 채널을 바꿀 때마다 다시 불러온다.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (authState === 'ready') loadChannels(viewingOwner?.id); }, [viewingOwner]);
   // 탭/채널 변경 시 페이지·검색 초기화
   useEffect(() => { setVideoPage(1); setVideoSearch(''); }, [activeTab, selectedChannelId]);
