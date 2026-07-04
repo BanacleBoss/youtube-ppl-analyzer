@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Loader } from 'lucide-react';
 import { getPublicSummary } from './api';
-import { formatKoreanCount, calculateEfficiencyScore, calculateViewTrend, calculatePPLRevenueFor, filterVideos } from './App';
+import { formatKoreanCount, calculateEfficiencyScore, calculateViewTrend, calculatePPLRevenueFor, filterVideos, trimmedMean } from './App';
 
 // 공유 링크(/share/:token)로 접근하는 읽기 전용 페이지.
 // 로그인/앱 상태 없이 독립적으로 동작하며, App.jsx에 모듈 레벨로 export된
@@ -52,8 +52,9 @@ export default function PublicSummary({ token }) {
   const d = eff.details;
   const lf = filterVideos(data.videos, 'longform');
   const recent = [...lf].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate)).slice(0, 10);
-  const avgViews = recent.length > 0 ? Math.round(recent.reduce((s, v) => s + (v.views || 0), 0) / recent.length) : 0;
-  const engagement = recent.length > 0 ? (recent.reduce((s, v) => s + (parseFloat(v.engagement) || 0), 0) / recent.length).toFixed(2) : '0';
+  // 효율 점수 계산과 동일하게 절사평균(이상치 제외)을 써서 바이럴/저조 영상 1개가 수치를 왜곡하지 않게 한다.
+  const avgViews = Math.round(trimmedMean(recent.map(v => v.views || 0)));
+  const engagement = trimmedMean(recent.map(v => parseFloat(v.engagement) || 0)).toFixed(2);
   const trend = calculateViewTrend(lf);
   const ppl = isInternal && data.pplSettings ? calculatePPLRevenueFor(data.videos, data.pplSettings) : null;
   const subsStats = (data.dailyStats || []).filter(s => s.subscribers).sort((a, b) => a.date.localeCompare(b.date));
@@ -87,6 +88,7 @@ export default function PublicSummary({ token }) {
               <div>
                 <h2 className="text-lg font-bold text-white">⚡ 채널 효율 점수</h2>
                 <p className="text-xs text-slate-400 mt-0.5">인게이지먼트(35) · 조회수비율(25) · 일관성(15) · 업로드주기(10) · 광고비율(10) · 채널연령(5)</p>
+                <p className="text-[10px] text-slate-500 mt-0.5">* 인게이지먼트는 구독자 규모별 상대 기준으로 평가합니다</p>
               </div>
               <div className="text-center flex-shrink-0">
                 <p className={`text-4xl font-bold ${scoreColor}`}>{eff.total}<span className="text-lg">점</span></p>
@@ -95,7 +97,8 @@ export default function PublicSummary({ token }) {
             </div>
             <div className="grid grid-cols-2 gap-3">
               {[
-                { icon: '💬', label: '인게이지먼트율', value: `${d.engRate}%`, score: d.engScore, max: 35 },
+                { icon: '💬', label: '인게이지먼트율', value: `${d.engRate}%`, score: d.engScore, max: 35,
+                  basis: `${d.subscriberTier} 기준 (하위25% ${d.benchmarkP25}% · 중앙값 ${d.benchmarkMedian}% · 상위25% ${d.benchmarkP75}%, 출처: ${d.benchmarkSource})${d.hasCommentQuality ? ` · 댓글품질 ${d.commentQualityAdjust >= 0 ? '+' : ''}${d.commentQualityAdjust}` : ''}` },
                 { icon: '👥', label: '구독자 대비 조회수', value: `${d.viewsRatio}%`, score: d.viewsScore, max: 25 },
                 { icon: '📊', label: '조회수 일관성', value: d.cvPercent !== null ? `CV ${d.cvPercent}%` : '-', score: d.consistencyScore, max: 15 },
                 { icon: '📅', label: '업로드 주기 (롱폼)', value: d.avgGapDays !== null ? `${d.avgGapDays}일` : '-', score: d.uploadScore, max: 10 },
@@ -108,6 +111,7 @@ export default function PublicSummary({ token }) {
                   <div className="flex justify-between items-center mt-1">
                     <p className="text-xs font-bold text-yellow-400">{item.score}/{item.max}점</p>
                   </div>
+                  {item.basis && <p className="text-[10px] text-slate-500 mt-0.5">근거: {item.basis}</p>}
                   <div className="w-full bg-black/40 rounded-full h-1.5 mt-2">
                     <div className={`h-1.5 rounded-full ${item.score / item.max >= 0.8 ? 'bg-green-400' : item.score / item.max >= 0.5 ? 'bg-yellow-400' : 'bg-red-400'}`} style={{ width: `${(item.score / item.max) * 100}%` }} />
                   </div>

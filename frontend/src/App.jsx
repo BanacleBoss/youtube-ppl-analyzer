@@ -247,6 +247,45 @@ export const calculateViewTrend = (videos) => {
   };
 };
 
+// 구독자 규모별 인게이지먼트율 벤치마크 (25백분위 / 중앙값 / 75백분위, 단위 %)
+// 출처: SociaVault Labs, 유튜브 채널 75,000개 분석 — "What Is a Good Engagement Rate on YouTube in 2026?"
+// (https://sociavault.com/blog/good-engagement-rate-youtube, 2026.04 발행)
+// 구독자가 적을수록(나노) 인게이지먼트율이 원래 높게 나오고, 구독자가 많을수록(메가) 낮게 나오는 게
+// 정상이다 — YouTube는 조회수 기반(구독자 기반 아님) 지표라 알고리즘 노출 위주 대형 채널일수록
+// 시청자 1인당 반응 강도는 낮아지는 경향이 있기 때문. 그래서 "5% 이상이면 우수" 같은 절대 기준 하나로
+// 모든 채널을 비교하면 구독자 많은 채널이 항상 불리하게 나온다 — 같은 체급(구독자 구간) 안에서
+// 상대적으로 비교해야 공정하다.
+// ⚠️ 주의: 이 수치는 숏폼/롱폼을 섞은 전체 콘텐츠 기준이고, 우리 앱은 롱폼(10분↑) 영상만 대상으로
+// 계산하므로 실제보다 다소 낮게 나올 수 있다. 또한 외부 조사 데이터라 매년 갱신이 필요하다.
+export const ENGAGEMENT_BENCHMARKS = [
+  { tier: '나노 (구독자 1천~1만)', min: 0, p25: 3.41, median: 5.23, p75: 7.82 },
+  { tier: '마이크로 (구독자 1만~5만)', min: 10000, p25: 2.48, median: 3.74, p75: 5.43 },
+  { tier: '미드 (구독자 5만~10만)', min: 50000, p25: 1.87, median: 2.81, p75: 4.12 },
+  { tier: '매크로 (구독자 10만~50만)', min: 100000, p25: 1.38, median: 2.12, p75: 3.24 },
+  { tier: '메가 (구독자 50만 이상)', min: 500000, p25: 0.89, median: 1.41, p75: 2.18 },
+];
+export const ENGAGEMENT_BENCHMARK_SOURCE = 'SociaVault Labs (2026.04) · 유튜브 채널 75,000개 분석';
+
+export const getEngagementBenchmark = (subscribers) => {
+  const s = subscribers || 0;
+  for (let i = ENGAGEMENT_BENCHMARKS.length - 1; i >= 0; i--) {
+    if (s >= ENGAGEMENT_BENCHMARKS[i].min) return ENGAGEMENT_BENCHMARKS[i];
+  }
+  return ENGAGEMENT_BENCHMARKS[0];
+};
+
+// 바이럴 영상 1개, 유독 저조한 영상 1개처럼 극단값 때문에 평균이 왜곡되는 것을 막기 위한 절사평균.
+// 표본이 5개 이상일 때만 최댓값·최솟값을 하나씩 제외하고, 그보다 적으면 왜곡 위험보다 표본 손실이
+// 더 크므로 그냥 평균을 쓴다.
+export const trimmedMean = (values) => {
+  const arr = (values || []).filter(v => typeof v === 'number' && !isNaN(v));
+  if (arr.length === 0) return 0;
+  if (arr.length < 5) return arr.reduce((s, v) => s + v, 0) / arr.length;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const trimmed = sorted.slice(1, -1);
+  return trimmed.reduce((s, v) => s + v, 0) / trimmed.length;
+};
+
 // 효율 점수 계산 (0~100점) — 인게이지먼트35 + 구독자대비조회수25 + 조회수일관성15 + 업로드주기10 + 광고비율10 + 채널연령5
 export const calculateEfficiencyScore = (channel) => {
   const videos = channel?.videos || [];
@@ -256,16 +295,29 @@ export const calculateEfficiencyScore = (channel) => {
   const lfSorted = [...lf].sort((a, b) => new Date(b.uploadDate) - new Date(a.uploadDate));
   const recentLF = lfSorted.slice(0, 10);
 
-  const engRate = recentLF.length > 0
-    ? recentLF.reduce((s, v) => s + (parseFloat(v.engagement) || 0), 0) / recentLF.length : 0;
-  let engScore = 3;
-  if (engRate >= 5) engScore = 35;
-  else if (engRate >= 3) engScore = 26;
-  else if (engRate >= 1.5) engScore = 17;
-  else if (engRate >= 0.5) engScore = 9;
+  // 바이럴 영상 1개, 유독 저조한 영상 1개가 평균을 왜곡하지 않도록 절사평균을 쓴다 (표본 5개 이상일 때).
+  const engRate = trimmedMean(recentLF.map(v => parseFloat(v.engagement) || 0));
 
-  const recentAvgViews = recentLF.length > 0
-    ? recentLF.reduce((s, v) => s + (v.views || 0), 0) / recentLF.length : 0;
+  // 인게이지먼트율은 "절대 기준"이 아니라 "같은 구독자 체급 안에서의 상대 기준"으로 평가한다.
+  // (근거: ENGAGEMENT_BENCHMARKS 상단 주석 참고, 출처 SociaVault 2026)
+  const benchmark = getEngagementBenchmark(subscribers);
+  const insufficientLFData = recentLF.length < 3; // 롱폼 3개 미만이면 신뢰도가 낮다는 것을 별도로 표시
+  let engRateScore = 2; // 하위 25%의 절반 미만 (최하위 구간)
+  if (engRate >= benchmark.p75) engRateScore = 30;
+  else if (engRate >= benchmark.median) engRateScore = 22;
+  else if (engRate >= benchmark.p25) engRateScore = 15;
+  else if (engRate >= benchmark.p25 * 0.5) engRateScore = 8;
+
+  // 댓글 "양"이 아니라 "질"을 반영한다 — 스팸/의미없는 댓글이 많으면 인게이지먼트율(단순 개수 기반)이
+  // 과대평가될 수 있어, 이미 계산해둔 댓글 품질 점수(구매의도·길이·답글비율·부정키워드 종합, 0~100)로
+  // ±5점 범위에서 보정한다. 댓글 분석을 아직 실행하지 않은 채널은 0점(중립) 처리 — 불이익을 주지 않는다.
+  const ca = channel?.commentAnalysis;
+  const hasCommentQuality = !!(ca && typeof ca.qualityScore === 'number');
+  const commentQualityAdjust = hasCommentQuality ? Math.round((ca.qualityScore - 50) / 50 * 5) : 0;
+
+  const engScore = Math.max(0, Math.min(35, engRateScore + commentQualityAdjust));
+
+  const recentAvgViews = trimmedMean(recentLF.map(v => v.views || 0));
   const viewsRatio = subscribers > 0 ? (recentAvgViews / subscribers) * 100 : 0;
   let viewsScore = 3;
   if (viewsRatio >= 30) viewsScore = 25;
@@ -326,6 +378,13 @@ export const calculateEfficiencyScore = (channel) => {
     total,
     details: {
       engRate: engRate.toFixed(2), engScore,
+      // 인게이지먼트 점수의 근거 — 어떤 구독자 티어의 어떤 벤치마크 수치와 비교했는지, 댓글 품질
+      // 보정이 얼마나 들어갔는지를 그대로 노출해서 UI에서 "왜 이 점수가 나왔는지"를 항상 보여줄 수 있게 한다.
+      engRateScore, subscriberTier: benchmark.tier,
+      benchmarkP25: benchmark.p25, benchmarkMedian: benchmark.median, benchmarkP75: benchmark.p75,
+      benchmarkSource: ENGAGEMENT_BENCHMARK_SOURCE,
+      hasCommentQuality, commentQualityAdjust,
+      insufficientLFData, lfSampleSize: recentLF.length,
       viewsRatio: viewsRatio.toFixed(1), viewsScore,
       cvPercent, consistencyScore,
       avgGapDays, uploadScore,
@@ -1311,8 +1370,17 @@ export default function YouTubeAnalyzer() {
     });
 
     // ── 2. 시청자 반응 & 인게이지먼트 ──
+    // 인게이지먼트 수준은 절대 기준이 아니라 같은 구독자 체급(subscriberTier) 안에서의 상대 위치로 판단한다.
+    // 근거: d.benchmarkP25/median/p75 (출처: d.benchmarkSource) — 구독자 규모가 다르면 "평균"의 기준 자체가 다르기 때문.
     const engRate = parseFloat(d.engRate);
-    const engLevel = engRate >= 5 ? '매우 높은' : engRate >= 3 ? '높은' : engRate >= 1.5 ? '평균 수준의' : '낮은';
+    const engLevel = d.insufficientLFData ? '평가하기엔 데이터가 부족한'
+      : engRate >= d.benchmarkP75 ? '같은 체급 대비 상위 25%에 드는 우수한'
+      : engRate >= d.benchmarkMedian ? '같은 체급 평균 이상의 양호한'
+      : engRate >= d.benchmarkP25 ? '같은 체급 평균 수준의'
+      : '같은 체급 대비 하위권인';
+    const commentQualityText = d.hasCommentQuality
+      ? ` (댓글 품질 분석 결과가 ${d.commentQualityAdjust >= 0 ? '긍정적으로' : '부정적으로'} 반영되어 ${d.commentQualityAdjust >= 0 ? '+' : ''}${d.commentQualityAdjust}점 보정됨)`
+      : '';
     const viewsRatioVal = parseFloat(d.viewsRatio);
     const loyaltyText = viewsRatioVal >= 30 ? '충성도 높은 팬층을 보유하고 있으며,' : viewsRatioVal >= 15 ? '적정 수준의 팬 충성도를 갖추고 있으며,' : '팬 충성도는 다소 낮은 편이나,';
     const cvText = d.cvPercent !== null
@@ -1323,7 +1391,8 @@ export default function YouTubeAnalyzer() {
       : '';
     sections.push({
       title: '📊 시청자 반응 분석',
-      body: `롱폼 기준 평균 인게이지먼트율 ${d.engRate}%로 ${engLevel} 반응도를 보입니다. ` +
+      body: `롱폼 기준 평균 인게이지먼트율(이상치 제외 절사평균) ${d.engRate}%로, ${d.subscriberTier} 구간 내에서 ${engLevel} 반응도를 보입니다${commentQualityText}. ` +
+        `${d.insufficientLFData ? `(롱폼 영상이 ${d.lfSampleSize}개뿐이라 참고용으로만 활용하세요.) ` : ''}` +
         `${loyaltyText} 구독자 대비 평균 조회수 비율은 ${d.viewsRatio}%입니다. ` +
         `${cvText} ${trendText}`
     });
@@ -1361,9 +1430,9 @@ export default function YouTubeAnalyzer() {
     } else if (matchedFamily.length > 0) {
       fitLevel = '중간';
       fitText = `가족·일상 채널로, 마사지기·헬스케어 제품의 '집에서 쉽게 쓰는 건강 아이템' 포지셔닝으로 접근하면 시청자 공감을 이끌어낼 수 있습니다.`;
-    } else if (subs >= 100000 && engRate >= 3) {
+    } else if (subs >= 100000 && engRate >= d.benchmarkMedian) {
       fitLevel = '중간';
-      fitText = `채널 카테고리가 헬스케어와 직접 연관되지는 않지만, 높은 인게이지먼트를 보유한 중대형 채널로서 브랜드 인지도 확대 목적의 PPL에는 적합할 수 있습니다. 타깃 시청자층 분석 후 판단을 권장합니다.`;
+      fitText = `채널 카테고리가 헬스케어와 직접 연관되지는 않지만, ${d.subscriberTier} 구간 평균(중앙값 ${d.benchmarkMedian}%) 이상의 인게이지먼트를 보유한 중대형 채널로서 브랜드 인지도 확대 목적의 PPL에는 적합할 수 있습니다. 타깃 시청자층 분석 후 판단을 권장합니다.`;
     } else {
       fitLevel = '낮음';
       fitText = `채널의 콘텐츠 방향성이 헬스케어·마사지 제품과의 연관성이 낮습니다. PPL 집행 시 시청자 거부감이 발생할 수 있어 신중한 검토가 필요합니다.`;
@@ -1537,6 +1606,12 @@ export default function YouTubeAnalyzer() {
       `| 평균 업로드 주기 (롱폼) | ${eff.details.avgGapDays !== null ? eff.details.avgGapDays+'일' : '-'} | ${eff.details.uploadScore}/10 |`,
       `| 최근 광고 비율 | ${eff.details.adRatio}% | ${eff.details.adScore}/10 |`,
       `| 채널 연령 | ${eff.details.channelAgeYears !== null ? eff.details.channelAgeYears+'년' : '-'} | ${eff.details.ageScore}/5 |`,
+      ``,
+      `> 📌 인게이지먼트율은 절대 기준이 아니라 **${eff.details.subscriberTier}** 구간 상대 기준으로 평가했습니다 ` +
+      `(하위25% ${eff.details.benchmarkP25}% · 중앙값 ${eff.details.benchmarkMedian}% · 상위25% ${eff.details.benchmarkP75}%, 절사평균 적용). ` +
+      `출처: ${eff.details.benchmarkSource}.` +
+      (eff.details.hasCommentQuality ? ` 댓글 품질 보정 ${eff.details.commentQualityAdjust >= 0 ? '+' : ''}${eff.details.commentQualityAdjust}점 반영.` : ' 댓글 품질 분석 미실시(중립 처리).') +
+      (eff.details.insufficientLFData ? ` ⚠️ 롱폼 영상이 ${eff.details.lfSampleSize}개뿐이라 참고용입니다.` : ''),
       ``,
       `## 📈 PPL 분석 (최근 롱폼 10개 기준)`,
       `| 항목 | 값 |`,
@@ -2134,7 +2209,7 @@ export default function YouTubeAnalyzer() {
                     <div className="grid grid-cols-2 gap-4 mb-6">
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">총 조회수</p><p className="text-2xl font-bold text-white mt-1">{formatKoreanCount(selectedChannel.totalViews)}회</p></div>
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">구독자</p><p className="text-2xl font-bold text-white mt-1">{formatKoreanCount(selectedChannel.subscribers)}명</p></div>
-                      <div className="bg-slate-700 rounded p-4"><InfoTooltip content="= (좋아요 + 댓글) / 조회수 × 100%"><p className="text-slate-400 text-sm">인게이지먼트</p><p className="text-2xl font-bold text-white mt-1">{pplData.engagement}%</p></InfoTooltip></div>
+                      <div className="bg-slate-700 rounded p-4"><InfoTooltip content="= (좋아요 + 댓글) / 조회수 × 100%. 구독자 규모별 상대 평가는 아래 효율 점수 카드에서 확인하세요."><p className="text-slate-400 text-sm">인게이지먼트</p><p className="text-2xl font-bold text-white mt-1">{pplData.engagement}%</p></InfoTooltip></div>
                       <div className="bg-slate-700 rounded p-4"><p className="text-slate-400 text-sm">평균 조회수</p><p className="text-2xl font-bold text-white mt-1">{formatKoreanCount(pplData.avgViews)}회</p></div>
                     </div>
 
@@ -2151,6 +2226,7 @@ export default function YouTubeAnalyzer() {
                             <div>
                               <h3 className="text-lg font-bold text-white">⚡ 채널 효율 점수</h3>
                               <p className="text-xs text-slate-400 mt-0.5">인게이지먼트(35) · 조회수비율(25) · 일관성(15) · 업로드주기(10) · 광고비율(10) · 채널연령(5)</p>
+                              <p className="text-[10px] text-slate-500 mt-0.5">* 인게이지먼트는 구독자 규모별 상대 기준으로 평가합니다 (하단 근거 참고)</p>
                             </div>
                             <div className="text-center">
                               <p className={`text-4xl font-bold ${scoreColor}`}>{eff.total}<span className="text-lg">점</span></p>
@@ -2159,8 +2235,14 @@ export default function YouTubeAnalyzer() {
                           </div>
                           <div className="grid grid-cols-2 gap-3">
                             {[
-                              { icon:'💬', label:'인게이지먼트율', value:`${d.engRate}%`, score:d.engScore, max:35, tooltip:'롱폼 최근 10개 기준 평균 인게이지먼트율. PPL 전환에 직결되는 가장 중요한 지표입니다.', status: d.engRate >= 5 ? '매우 높음 ✓' : d.engRate >= 3 ? '높음' : d.engRate >= 1.5 ? '보통' : '낮음' },
-                              { icon:'👥', label:'구독자 대비 조회수', value:`${d.viewsRatio}%`, score:d.viewsScore, max:25, tooltip:'최근 10개 영상 평균 조회수 ÷ 구독자 수. 30% 이상이면 충성도 높은 채널입니다.', status: d.viewsRatio >= 30 ? '충성도 높음 ✓' : d.viewsRatio >= 15 ? '보통' : '낮음' },
+                              { icon:'💬', label:'인게이지먼트율', value:`${d.engRate}%`, score:d.engScore, max:35,
+                                tooltip:`= (좋아요+댓글)/조회수, 절사평균(이상치 제외). '${d.subscriberTier}' 구간 벤치마크 대비 상대 평가 — 하위25% ${d.benchmarkP25}% · 중앙값 ${d.benchmarkMedian}% · 상위25% ${d.benchmarkP75}% (출처: ${d.benchmarkSource}).${d.hasCommentQuality ? ` 댓글 품질 보정 ${d.commentQualityAdjust >= 0 ? '+' : ''}${d.commentQualityAdjust}점 반영됨.` : ' 댓글 품질 분석 미실시로 중립(0점) 처리됨.'}`,
+                                status: d.insufficientLFData ? `⚠️ 데이터 부족 (롱폼 ${d.lfSampleSize}개)` :
+                                  (parseFloat(d.engRate) >= d.benchmarkP75 ? '상위 25% (우수) ✓' :
+                                   parseFloat(d.engRate) >= d.benchmarkMedian ? '중앙값 이상 (양호)' :
+                                   parseFloat(d.engRate) >= d.benchmarkP25 ? '평균 수준' : '하위 25% (저조)'),
+                                basis: `${d.subscriberTier} 기준${d.hasCommentQuality ? ` · 댓글품질 ${d.commentQualityAdjust >= 0 ? '+' : ''}${d.commentQualityAdjust}` : ''}` },
+                              { icon:'👥', label:'구독자 대비 조회수', value:`${d.viewsRatio}%`, score:d.viewsScore, max:25, tooltip:'최근 10개 영상 절사평균 조회수 ÷ 구독자 수. 30% 이상이면 충성도 높은 채널입니다.', status: d.viewsRatio >= 30 ? '충성도 높음 ✓' : d.viewsRatio >= 15 ? '보통' : '낮음' },
                               { icon:'📊', label:'조회수 일관성', value: d.cvPercent !== null ? `CV ${d.cvPercent}%` : '-', score:d.consistencyScore, max:15, tooltip:'조회수 변동계수(CV). 낮을수록 매 영상 조회수가 안정적 — PPL ROI 예측이 쉽습니다.', status: d.cvPercent !== null ? (d.cvPercent <= 30 ? '매우 안정적 ✓' : d.cvPercent <= 60 ? '안정적' : d.cvPercent <= 100 ? '보통' : '불안정') : '-' },
                               { icon:'📅', label:'업로드 주기 (롱폼)', value: d.avgGapDays !== null ? `${d.avgGapDays}일` : '-', score:d.uploadScore, max:10, tooltip:'최근 롱폼 10개 기준 평균 업로드 간격. 7일 이하면 꾸준히 활동하는 채널입니다.', status: d.avgGapDays !== null ? (d.avgGapDays <= 7 ? '매우 활발 ✓' : d.avgGapDays <= 14 ? '활발' : d.avgGapDays <= 30 ? '보통' : '비활성') : '-' },
                               { icon:'📢', label:'최근 광고 비율', value:`${d.adRatio}%`, score:d.adScore, max:10, tooltip:'최근 영상 20개 중 광고(isAd) 비율. 낮을수록 PPL 피로도가 낮고 수용도가 높습니다.', status: d.adRatio <= 10 ? 'PPL 친화적 ✓' : d.adRatio <= 25 ? '양호' : d.adRatio <= 40 ? '주의' : '광고 과다' },
@@ -2175,6 +2257,7 @@ export default function YouTubeAnalyzer() {
                                   <p className="text-xs text-slate-400">{item.status}</p>
                                   <p className="text-xs font-bold text-yellow-400">{item.score}/{item.max}점</p>
                                 </div>
+                                {item.basis && <p className="text-[10px] text-slate-500 mt-0.5">근거: {item.basis}</p>}
                                 <div className="w-full bg-black/40 rounded-full h-1.5 mt-2">
                                   <div className={`h-1.5 rounded-full transition-all ${item.score/item.max >= 0.8 ? 'bg-green-400' : item.score/item.max >= 0.5 ? 'bg-yellow-400' : 'bg-red-400'}`} style={{width:`${(item.score/item.max)*100}%`}} />
                                 </div>
@@ -3447,6 +3530,11 @@ export default function YouTubeAnalyzer() {
             {/* 본문 */}
             <div className="px-6 py-6 space-y-8 text-sm">
 
+              {/* 데이터 근거 원칙 안내 */}
+              <div className="bg-blue-900/20 border border-blue-700/40 rounded-lg px-4 py-3">
+                <p className="text-blue-300 text-xs">📌 이 프로그램의 모든 자동 계산·점수·추천에는 계산식과 비교 기준, 외부 데이터를 쓴 경우 출처가 함께 표시됩니다. 화면의 <span className="inline-flex items-center"><HelpCircle size={12} className="mx-0.5" /></span> 아이콘에 마우스를 올리거나 "근거:" 문구를 확인하면 왜 이 숫자가 나왔는지 항상 알 수 있습니다.</p>
+              </div>
+
               {/* 전체 흐름 */}
               <section>
                 <h3 className="text-blue-400 font-bold text-base mb-3">🗺️ 전체 사용 흐름</h3>
@@ -3509,7 +3597,7 @@ export default function YouTubeAnalyzer() {
                   <p className="text-slate-300 mb-3">총 <span className="text-white font-bold">100점</span> 만점으로, 6개 지표를 중요도에 따라 가중치 배점합니다.</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
                     {[
-                      { label:'💬 인게이지먼트율', score:'35점', desc:'(좋아요+댓글)÷조회수. 가장 중요한 지표' },
+                      { label:'💬 인게이지먼트율', score:'35점', desc:'(좋아요+댓글)÷조회수. 구독자 규모별 상대 기준으로 평가 (아래 상세 설명 참고)' },
                       { label:'👥 구독자 대비 조회수', score:'25점', desc:'팬 충성도. 30% 이상이면 우수' },
                       { label:'📊 조회수 일관성', score:'15점', desc:'영상별 편차. 낮을수록 안정적' },
                       { label:'📅 업로드 주기', score:'10점', desc:'롱폼 기준. 14일 이내면 활발' },
@@ -3529,6 +3617,50 @@ export default function YouTubeAnalyzer() {
                     <span className="bg-green-700/40 text-green-300 px-2 py-1 rounded border border-green-700/60">✅ 75점↑ PPL 적합</span>
                     <span className="bg-yellow-700/40 text-yellow-300 px-2 py-1 rounded border border-yellow-700/60">⚠️ 50~74점 검토 필요</span>
                     <span className="bg-red-700/40 text-red-300 px-2 py-1 rounded border border-red-700/60">❌ 50점↓ 비적합</span>
+                  </div>
+                </div>
+              </section>
+
+              {/* 인게이지먼트 벤치마크 근거 상세 */}
+              <section>
+                <h3 className="text-teal-400 font-bold text-base mb-3">📐 인게이지먼트율, 어떻게 평가하나요?</h3>
+                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 space-y-3">
+                  <p className="text-slate-300">인게이지먼트율은 <span className="text-white font-semibold">고정된 절대 기준이 아니라 구독자 규모(체급)별 상대 기준</span>으로 평가합니다. 구독자가 적은 채널일수록 인게이지먼트율이 원래 높게 나오고 구독자가 많을수록 낮게 나오는 게 정상이라, 같은 기준(예: "5% 이상이면 우수")으로 모든 채널을 비교하면 구독자 많은 채널이 항상 불리해지기 때문입니다.</p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs text-left whitespace-nowrap">
+                      <thead>
+                        <tr className="text-slate-400 border-b border-slate-700">
+                          <th className="py-1.5 pr-3">구독자 구간</th>
+                          <th className="py-1.5 pr-3">하위 25%</th>
+                          <th className="py-1.5 pr-3">중앙값</th>
+                          <th className="py-1.5">상위 25%</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-slate-300">
+                        {ENGAGEMENT_BENCHMARKS.map(b => (
+                          <tr key={b.tier} className="border-b border-slate-800">
+                            <td className="py-1.5 pr-3">{b.tier}</td>
+                            <td className="py-1.5 pr-3">{b.p25}%</td>
+                            <td className="py-1.5 pr-3 text-white font-semibold">{b.median}%</td>
+                            <td className="py-1.5">{b.p75}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="text-slate-500 text-xs">출처: {ENGAGEMENT_BENCHMARK_SOURCE} (2026.04 발행 자료 — 외부 조사 데이터라 매년 갱신이 필요합니다)</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                    <div className="bg-slate-700/60 rounded p-2">
+                      <p className="text-white text-xs font-semibold">📉 이상치 보정 (절사평균)</p>
+                      <p className="text-slate-400 text-xs">최근 롱폼 10개 기준, 표본이 5개 이상이면 최댓값·최솟값을 하나씩 제외하고 평균을 냅니다. 바이럴 영상 1개나 유독 저조한 영상 1개가 전체 평가를 왜곡하지 않도록 하기 위함입니다.</p>
+                    </div>
+                    <div className="bg-slate-700/60 rounded p-2">
+                      <p className="text-white text-xs font-semibold">💬 댓글 품질 보정</p>
+                      <p className="text-slate-400 text-xs">"댓글 분석"을 실행한 채널은 댓글 품질 점수(구매의도·길이·답글비율·부정키워드 종합)로 ±5점 범위에서 보정됩니다. 스팸/의미없는 댓글이 많으면 감점, 실행 전이면 중립(0점) 처리됩니다.</p>
+                    </div>
+                  </div>
+                  <div className="bg-yellow-900/20 border border-yellow-700/40 rounded p-3">
+                    <p className="text-yellow-300 text-xs">⚠️ 이 벤치마크는 숏폼·롱폼을 섞은 전체 콘텐츠 기준의 외부 조사 자료이고, 우리 앱은 롱폼(10분↑) 영상만 계산에 사용하므로 실제보다 다소 낮게 나올 수 있습니다. 또 롱폼 영상이 3개 미만인 채널은 "데이터 부족" 표시가 함께 나오니 참고용으로만 활용하세요. 요약 탭의 인게이지먼트율에 마우스를 올리면 해당 채널의 구독자 구간과 비교 수치를 그대로 보여줍니다.</p>
                   </div>
                 </div>
               </section>

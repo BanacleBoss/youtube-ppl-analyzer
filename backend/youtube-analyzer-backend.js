@@ -389,6 +389,26 @@ function toPercentOrNull(value) {
   return Math.min(100, Math.max(0, n));
 }
 
+// 구독자 규모별 인게이지먼트율 벤치마크 — 프론트(frontend/src/App.jsx)의 ENGAGEMENT_BENCHMARKS와
+// 반드시 동일하게 유지해야 한다 (프론트/백엔드가 별도 배포 단위라 공유 모듈로 묶지 못해 부득이하게 중복 정의함).
+// 출처: SociaVault Labs, 유튜브 채널 75,000개 분석 (2026.04, https://sociavault.com/blog/good-engagement-rate-youtube)
+// 구독자가 적을수록 인게이지먼트율이 원래 높게 나오므로, 절대 기준(예: "5% 이상이면 우수") 하나로
+// 모든 채널을 비교하면 안 되고 같은 구독자 체급 안에서 상대적으로 비교해야 한다.
+const ENGAGEMENT_BENCHMARKS = [
+  { tier: '나노(1천~1만)', min: 0, p25: 3.41, median: 5.23, p75: 7.82 },
+  { tier: '마이크로(1만~5만)', min: 10000, p25: 2.48, median: 3.74, p75: 5.43 },
+  { tier: '미드(5만~10만)', min: 50000, p25: 1.87, median: 2.81, p75: 4.12 },
+  { tier: '매크로(10만~50만)', min: 100000, p25: 1.38, median: 2.12, p75: 3.24 },
+  { tier: '메가(50만+)', min: 500000, p25: 0.89, median: 1.41, p75: 2.18 },
+];
+function getEngagementBenchmark(subscribers) {
+  const s = subscribers || 0;
+  for (let i = ENGAGEMENT_BENCHMARKS.length - 1; i >= 0; i--) {
+    if (s >= ENGAGEMENT_BENCHMARKS[i].min) return ENGAGEMENT_BENCHMARKS[i];
+  }
+  return ENGAGEMENT_BENCHMARKS[0];
+}
+
 // ── 인증/권한 미들웨어 ──────────────────────────────────────────
 // Authorization: Bearer <token> 헤더의 JWT를 검증하고 req.user = { id, name, email, role }를 설정한다.
 // 로그인 없이 서비스가 전면 공개되어 있던 것을, 팀원별 계정 로그인이 있어야만 쓸 수 있게 막는 게이트.
@@ -1584,10 +1604,12 @@ app.get('/api/search', requireAuth, async (req, res) => {
       else if (subscribers >= 10000 && subscribers < 100000) score += 15;
       else if (subscribers > 1000000 && subscribers <= 5000000) score += 20;
       else if (subscribers > 5000000) score += 10;
-      // 인게이지먼트 (25점)
-      if (engagement >= 5) score += 25;
-      else if (engagement >= 3) score += 20;
-      else if (engagement >= 1) score += 10;
+      // 인게이지먼트 (25점) — 구독자 규모별 상대 기준(같은 체급 내 25백분위/중앙값/75백분위 비교).
+      // 절대 기준(예: "5% 이상")을 쓰면 구독자가 많은 채널이 항상 불리해지므로 체급별로 비교한다.
+      const engBenchmark = getEngagementBenchmark(subscribers);
+      if (engagement >= engBenchmark.p75) score += 25;
+      else if (engagement >= engBenchmark.median) score += 18;
+      else if (engagement >= engBenchmark.p25) score += 10;
       // 롱폼 비중 (20점): 안마기 PPL은 롱폼에서 효과적
       if (longformRatio >= 60) score += 20;
       else if (longformRatio >= 30) score += 10;
