@@ -1442,8 +1442,15 @@ app.get('/api/channels/:id/export', requireAuth, async (req, res) => {
     });
 
     // 파일 저장
+    // Content-Disposition 헤더는 ASCII(Latin-1)만 허용되는데 채널명에 한글이 들어가 있으면
+    // Node가 "Invalid character in header content" 에러를 던지며 다운로드 자체가 실패한다.
+    // RFC 5987 방식(filename*=UTF-8''...)으로 한글 파일명을 percent-encoding해서 넣고,
+    // 구형 브라우저를 위한 ASCII 대체 파일명(filename=)도 함께 제공한다.
+    // 파일명에 못 쓰는 문자(\/:*?"<>|)가 채널명에 섞여 있을 경우도 대비해 '_'로 치환한다.
+    const safeChannelName = (channel.channelName || '채널').replace(/[\\/:*?"<>|]/g, '_');
+    const fileName = `PPL_분석_${safeChannelName}_${new Date().toISOString().split('T')[0]}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="PPL_분석_${channel.channelName}_${new Date().toISOString().split('T')[0]}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="export.xlsx"; filename*=UTF-8''${encodeURIComponent(fileName)}`);
 
     await workbook.xlsx.write(res);
     res.end();
