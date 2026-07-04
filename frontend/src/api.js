@@ -7,13 +7,71 @@ const api = axios.create({
   timeout: 120000  // 채널 추가 시 YouTube API 다중 호출로 시간 소요
 });
 
+// 로그인 토큰을 매 요청마다 자동으로 실어 보낸다 (localStorage에 저장된 토큰 사용).
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('authToken');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+// 토큰이 만료/무효화된 경우(401) 자동으로 로그인 화면으로 돌려보내기 위한 훅.
+// App 컴포넌트가 로그인 성공 시 이 핸들러를 등록해두면, 어떤 API 호출에서 401이 나든
+// 즉시 로그아웃 처리 + 로그인 화면 전환이 되도록 한다.
+let unauthorizedHandler = null;
+export const setUnauthorizedHandler = (fn) => { unauthorizedHandler = fn; };
+
+api.interceptors.response.use(
+  res => res,
+  err => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('authUser');
+      if (unauthorizedHandler) unauthorizedHandler();
+    }
+    return Promise.reject(err);
+  }
+);
+
+// ── 인증 ──────────────────────────────────────────────
+export const getSetupStatus = async () => {
+  const response = await api.get('/auth/setup-status');
+  return response.data; // { needsSetup }
+};
+
+export const setupAdmin = async ({ name, email, password }) => {
+  const response = await api.post('/auth/setup-admin', { name, email, password });
+  return response.data; // { token, user }
+};
+
+export const login = async ({ email, password }) => {
+  const response = await api.post('/auth/login', { email, password });
+  return response.data; // { token, user }
+};
+
+export const getMe = async () => {
+  const response = await api.get('/auth/me');
+  return response.data; // { user }
+};
+
+// ── 팀원 관리 ─────────────────────────────────────────
+export const getUsers = async () => {
+  const response = await api.get('/users');
+  return response.data;
+};
+
+export const createUser = async ({ name, email, password, role }) => {
+  const response = await api.post('/users', { name, email, password, role });
+  return response.data;
+};
+
 export const addChannel = async (channelId) => {
   const response = await api.post('/channels', { channelId });
   return response.data;
 };
 
-export const getChannels = async () => {
-  const response = await api.get('/channels');
+// ownerId를 넘기면 그 팀원의 채널을, 'all'을 넘기면(관리자 전용) 전체 채널을, 생략하면 내 채널을 가져온다.
+export const getChannels = async (ownerId) => {
+  const response = await api.get('/channels', { params: ownerId ? { ownerId } : {} });
   return response.data;
 };
 

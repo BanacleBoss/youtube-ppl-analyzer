@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { Eye, Plus, Trash2, RefreshCw, Loader, Download, ExternalLink, ArrowUp, ArrowDown, HelpCircle, Package, Pencil, Camera } from 'lucide-react';
 import html2canvas from 'html2canvas';
-import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog, getShareLink, revokeShareLink, setVideoCampaignFlag, updateSettingsHistory, deleteSettingsHistory } from './api';
+import api, { addChannel, getChannels, refreshChannel, deleteChannel, searchChannels, analyzeComments, getItems, addItem, updateItem, deleteItem, addCampaignLog, deleteCampaignLog, getShareLink, revokeShareLink, setVideoCampaignFlag, updateSettingsHistory, deleteSettingsHistory, getSetupStatus, setupAdmin, login, getMe, getUsers, createUser, setUnauthorizedHandler } from './api';
 
 // 시청자 프로필(연령대/성별/카테고리) 폼의 빈 상태. YouTube 공개 API는 채널 소유자 본인이 아니면
 // 시청자 연령/성별 통계를 절대 내주지 않으므로(그건 채널 주인의 OAuth 동의가 필요한 YouTube Analytics
@@ -12,6 +12,52 @@ const EMPTY_AUDIENCE_PROFILE = { category: '', age1824: '', age2534: '', age3544
 
 // 카테고리 자유 입력을 돕는 프리셋 — 대행사(쇼크)가 관리하는 리스트에서 흔히 쓰는 분류 기준을 참고
 const CATEGORY_PRESETS = ['국내V로그', '국제', '육아', '코미디', '야외활동', '리빙', '예능', '외국인V로그', '국외', '뷰티', '건강', '푸드', '게임', '교육', '반려동물'];
+
+// 로그인/최초 관리자 계정 생성 화면에서 공통으로 쓰는 인증 폼 레이아웃.
+// mode='setup'이면 이름 입력란이 추가되고 문구가 "최초 관리자 계정 만들기"로 바뀐다.
+const AuthScreen = ({ mode, onSubmit, busy, errorMsg }) => {
+  const [form, setForm] = useState({ name: '', email: '', password: '' });
+  const isSetup = mode === 'setup';
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-slate-800 border border-slate-700 rounded-xl p-6 sm:p-8 shadow-xl">
+        <h1 className="text-xl font-bold text-white mb-1 text-center">📊 YouTube Channel <span className="text-blue-400">Analyzer</span></h1>
+        <p className="text-slate-400 text-sm text-center mb-6">{isSetup ? '최초 관리자 계정을 만들어주세요' : '로그인이 필요합니다'}</p>
+
+        <form onSubmit={e => { e.preventDefault(); onSubmit(form); }} className="space-y-3">
+          {isSetup && (
+            <div>
+              <label className="block text-slate-300 text-xs mb-1">이름</label>
+              <input type="text" required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="예: 정승환"
+                className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" />
+            </div>
+          )}
+          <div>
+            <label className="block text-slate-300 text-xs mb-1">이메일</label>
+            <input type="email" required value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+              placeholder="example@zespa.co.kr"
+              className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" />
+          </div>
+          <div>
+            <label className="block text-slate-300 text-xs mb-1">비밀번호{isSetup && ' (8자 이상)'}</label>
+            <input type="password" required value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+              placeholder="••••••••"
+              className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500" />
+          </div>
+
+          {errorMsg && <p className="text-red-400 text-xs">{errorMsg}</p>}
+
+          <button type="submit" disabled={busy}
+            className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white py-2.5 rounded-lg transition font-semibold text-sm mt-2">
+            {busy ? '처리 중...' : (isSetup ? '관리자 계정 만들기' : '로그인')}
+          </button>
+        </form>
+        {!isSetup && <p className="text-slate-500 text-xs text-center mt-4">계정이 없다면 관리자에게 문의하세요. 회원가입 폼은 제공하지 않습니다.</p>}
+      </div>
+    </div>
+  );
+};
 
 const InfoTooltip = ({ content, children }) => {
   const [showTooltip, setShowTooltip] = useState(false);
@@ -355,7 +401,109 @@ export default function YouTubeAnalyzer() {
   const [statusFilter, setStatusFilter] = useState('전체');
   const [categoryFilter, setCategoryFilter] = useState('전체');
 
-  useEffect(() => { loadChannels(); loadItems(); }, []);
+  // ── 로그인/팀원 ──────────────────────────────────────
+  const [authState, setAuthState] = useState('loading'); // loading | setup | login | ready
+  const [authBusy, setAuthBusy] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [currentUser, setCurrentUser] = useState(null);
+  const [showTeam, setShowTeam] = useState(false);
+  const [teamMembers, setTeamMembers] = useState([]);
+  const [loadingTeam, setLoadingTeam] = useState(false);
+  const [newMemberForm, setNewMemberForm] = useState({ name: '', email: '', password: '', role: 'member' });
+  const [addingMember, setAddingMember] = useState(false);
+  const [memberError, setMemberError] = useState('');
+  const [viewingOwner, setViewingOwner] = useState(null); // null = 내 채널, { id, name } = 다른 팀원 채널 보는 중
+
+  // 앱 시작 시 로그인 상태 확인: 토큰이 있으면 바로 진입, 없으면 최초 셋업 필요 여부를 확인해
+  // 로그인 화면 또는 "최초 관리자 계정 만들기" 화면 중 하나를 보여준다.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setCurrentUser(null);
+      setAuthState('login');
+      setAuthError('로그인이 만료되었습니다. 다시 로그인해주세요');
+    });
+
+    const savedToken = localStorage.getItem('authToken');
+    const savedUser = localStorage.getItem('authUser');
+    if (savedToken && savedUser) {
+      try {
+        setCurrentUser(JSON.parse(savedUser));
+        setAuthState('ready');
+        return;
+      } catch (e) { /* 저장된 값이 깨졌으면 무시하고 아래 로직으로 진행 */ }
+    }
+    (async () => {
+      try {
+        const { needsSetup } = await getSetupStatus();
+        setAuthState(needsSetup ? 'setup' : 'login');
+      } catch (e) {
+        setAuthState('login');
+      }
+    })();
+  }, []);
+
+  const handleAuthSubmit = async (form) => {
+    setAuthBusy(true);
+    setAuthError('');
+    try {
+      const result = authState === 'setup' ? await setupAdmin(form) : await login(form);
+      localStorage.setItem('authToken', result.token);
+      localStorage.setItem('authUser', JSON.stringify(result.user));
+      setCurrentUser(result.user);
+      setAuthState('ready');
+    } catch (err) {
+      setAuthError(err.response?.data?.error || '처리 중 오류가 발생했습니다');
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('authUser');
+    setCurrentUser(null);
+    setViewingOwner(null);
+    setAuthState('login');
+  };
+
+  const loadTeamMembers = async () => {
+    setLoadingTeam(true);
+    try {
+      const data = await getUsers();
+      setTeamMembers(data);
+    } catch (e) { /* 조용히 무시 — 핵심 기능 아님 */ }
+    setLoadingTeam(false);
+  };
+
+  const handleAddMember = async () => {
+    if (!newMemberForm.name.trim() || !newMemberForm.email.trim() || !newMemberForm.password.trim()) {
+      setMemberError('이름/이메일/비밀번호를 모두 입력하세요');
+      return;
+    }
+    setAddingMember(true);
+    setMemberError('');
+    try {
+      await createUser(newMemberForm);
+      setNewMemberForm({ name: '', email: '', password: '', role: 'member' });
+      await loadTeamMembers();
+    } catch (err) {
+      setMemberError(err.response?.data?.error || '계정 생성 중 오류가 발생했습니다');
+    } finally {
+      setAddingMember(false);
+    }
+  };
+
+  // 팀원 이름을 클릭해 그 사람의 채널로 전환/복귀
+  const viewOwnerChannels = (member) => {
+    setViewingOwner(member ? { id: member.id, name: member.name } : null);
+    setSelectedChannelId(null);
+    setShowTeam(false);
+  };
+
+  // 로그인 완료 후에만 채널/품목을 불러온다 (로그인 전에 호출하면 401만 반복될 뿐이다).
+  useEffect(() => { if (authState === 'ready') { loadChannels(viewingOwner?.id); loadItems(); } }, [authState]);
+  // 팀원 목록에서 다른 사람 이름을 클릭해 보는 채널을 바꿀 때마다 다시 불러온다.
+  useEffect(() => { if (authState === 'ready') loadChannels(viewingOwner?.id); }, [viewingOwner]);
   // 탭/채널 변경 시 페이지·검색 초기화
   useEffect(() => { setVideoPage(1); setVideoSearch(''); }, [activeTab, selectedChannelId]);
 
@@ -409,11 +557,11 @@ export default function YouTubeAnalyzer() {
     }
   }, [selectedChannelId, channels]);
 
-  const loadChannels = async () => {
+  const loadChannels = async (ownerId) => {
     try {
       setLoading(true);
       setError(null);
-      const data = await getChannels();
+      const data = await getChannels(ownerId);
       setChannels(data);
     } catch (err) {
       setError('채널 목록을 불러올 수 없습니다');
@@ -1460,6 +1608,21 @@ export default function YouTubeAnalyzer() {
   const sortedMidVideos = getSortedVideos(midVideos);
   const sortedShortsVideos = getSortedVideos(shortsVideos);
 
+  // 로그인 전에는 메인 화면을 렌더링하지 않고 로딩/최초 셋업/로그인 화면만 보여준다.
+  if (authState === 'loading') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center">
+        <Loader size={28} className="animate-spin text-blue-400" />
+      </div>
+    );
+  }
+  if (authState === 'setup' || authState === 'login') {
+    return <AuthScreen mode={authState} onSubmit={handleAuthSubmit} busy={authBusy} errorMsg={authError} />;
+  }
+
+  const isViewingOther = !!viewingOwner;
+  const isAdmin = currentUser?.role === 'admin';
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
       <div className="bg-black bg-opacity-50 border-b border-slate-700 sticky top-0 z-40">
@@ -1473,11 +1636,13 @@ export default function YouTubeAnalyzer() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2 sm:gap-3">
-              <button onClick={handleRefreshAll} disabled={refreshingAll || channels.length === 0} className={`flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border ${refreshingAll ? 'bg-cyan-600/20 border-cyan-500 text-cyan-300' : 'bg-transparent border-slate-600 text-slate-300 hover:border-cyan-400 hover:text-cyan-300'} disabled:opacity-40`}>
-                {refreshingAll
-                  ? <><Loader size={14} className="animate-spin" /> {refreshAllProgress.current}/{refreshAllProgress.total} 갱신 중</>
-                  : <><RefreshCw size={14} /> 전체 갱신</>}
-              </button>
+              {!isViewingOther && (
+                <button onClick={handleRefreshAll} disabled={refreshingAll || channels.length === 0} className={`flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border ${refreshingAll ? 'bg-cyan-600/20 border-cyan-500 text-cyan-300' : 'bg-transparent border-slate-600 text-slate-300 hover:border-cyan-400 hover:text-cyan-300'} disabled:opacity-40`}>
+                  {refreshingAll
+                    ? <><Loader size={14} className="animate-spin" /> {refreshAllProgress.current}/{refreshAllProgress.total} 갱신 중</>
+                    : <><RefreshCw size={14} /> 전체 갱신</>}
+                </button>
+              )}
               <button onClick={() => setShowGuide(true)} className="flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border bg-transparent border-slate-600 text-slate-300 hover:border-blue-400 hover:text-blue-300">
                 ❓ 사용 가이드
               </button>
@@ -1490,11 +1655,68 @@ export default function YouTubeAnalyzer() {
               <button onClick={() => { setCompareMode(!compareMode); setCompareChannelIds([]); }} className={`flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border ${compareMode ? 'bg-orange-600/20 border-orange-500 text-orange-300' : 'bg-transparent border-slate-600 text-slate-300 hover:border-slate-500 hover:text-white'}`}>
                 ⚖️ {compareMode ? `비교 중 (${compareChannelIds.length}개 선택)` : '채널 비교'}
               </button>
-              <button onClick={() => setShowAddForm(true)} className="flex-1 sm:flex-none justify-center bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition text-sm font-semibold shadow-lg shadow-blue-900/40" disabled={loading}>
-                <Plus size={18} /> 채널 추가
+              {!isViewingOther && (
+                <button onClick={() => setShowAddForm(true)} className="flex-1 sm:flex-none justify-center bg-blue-600 hover:bg-blue-700 text-white px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition text-sm font-semibold shadow-lg shadow-blue-900/40" disabled={loading}>
+                  <Plus size={18} /> 채널 추가
+                </button>
+              )}
+              <button onClick={() => { setShowTeam(!showTeam); if (!showTeam) loadTeamMembers(); }} className={`flex-1 sm:flex-none justify-center px-3 sm:px-5 py-2 sm:py-2.5 rounded-lg flex items-center gap-2 transition font-medium text-sm border ${showTeam ? 'bg-teal-600/20 border-teal-500 text-teal-300' : 'bg-transparent border-slate-600 text-slate-300 hover:border-slate-500 hover:text-white'}`}>
+                👥 팀원
               </button>
+              <div className="flex items-center gap-2 pl-1">
+                <span className="text-slate-400 text-xs hidden sm:inline">{currentUser?.name}{isAdmin && <span className="text-teal-400 ml-1">(관리자)</span>}</span>
+                <button onClick={handleLogout} title="로그아웃" className="text-slate-500 hover:text-red-400 text-xs px-2 py-1 rounded border border-slate-700 hover:border-red-500/50 transition">
+                  로그아웃
+                </button>
+              </div>
             </div>
           </div>
+
+          {isViewingOther && (
+            <div className="mt-3 bg-teal-900/30 border border-teal-700/50 rounded-lg px-4 py-2 flex items-center justify-between gap-3">
+              <p className="text-teal-300 text-sm">👀 <strong>{viewingOwner.name}</strong>님의 채널을 보는 중입니다 (읽기 전용)</p>
+              <button onClick={() => viewOwnerChannels(null)} className="text-xs bg-slate-700 hover:bg-slate-600 text-white px-3 py-1 rounded transition flex-shrink-0">내 채널로 돌아가기</button>
+            </div>
+          )}
+
+          {showTeam && (
+            <div className="mt-3 bg-slate-800 border border-slate-700 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-white font-semibold text-sm">👥 팀원 목록</h3>
+                {loadingTeam && <Loader size={14} className="animate-spin text-slate-400" />}
+              </div>
+              <div className="space-y-1.5 mb-3">
+                <button onClick={() => viewOwnerChannels(null)} className={`w-full text-left px-3 py-2 rounded-lg text-sm transition flex items-center justify-between ${!isViewingOther ? 'bg-blue-950/60 border border-blue-500 text-white' : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700'}`}>
+                  <span>내 채널 ({currentUser?.name})</span>
+                </button>
+                {teamMembers.filter(m => m.id !== currentUser?.id).map(m => (
+                  <button key={m.id} onClick={() => viewOwnerChannels(m)} className={`w-full text-left px-3 py-2 rounded-lg text-sm transition flex items-center justify-between ${viewingOwner?.id === m.id ? 'bg-blue-950/60 border border-blue-500 text-white' : 'bg-slate-700/50 text-slate-300 hover:bg-slate-700'}`}>
+                    <span>{m.name} <span className="text-slate-500 text-xs">{m.email}</span>{m.role === 'admin' && <span className="text-teal-400 text-xs ml-1">관리자</span>}</span>
+                    <span className="text-slate-400 text-xs">채널 {m.channelCount}개</span>
+                  </button>
+                ))}
+              </div>
+
+              {isAdmin && (
+                <div className="border-t border-slate-700 pt-3">
+                  <p className="text-slate-300 text-xs font-medium mb-2">+ 팀원 계정 추가</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 mb-2">
+                    <input type="text" value={newMemberForm.name} onChange={e => setNewMemberForm(f => ({ ...f, name: e.target.value }))} placeholder="이름" className="bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-teal-500" />
+                    <input type="email" value={newMemberForm.email} onChange={e => setNewMemberForm(f => ({ ...f, email: e.target.value }))} placeholder="이메일" className="bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-teal-500" />
+                    <input type="password" value={newMemberForm.password} onChange={e => setNewMemberForm(f => ({ ...f, password: e.target.value }))} placeholder="초기 비밀번호(8자+)" className="bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-teal-500" />
+                    <select value={newMemberForm.role} onChange={e => setNewMemberForm(f => ({ ...f, role: e.target.value }))} className="bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-teal-500">
+                      <option value="member">일반 팀원</option>
+                      <option value="admin">관리자</option>
+                    </select>
+                  </div>
+                  {memberError && <p className="text-red-400 text-xs mb-2">{memberError}</p>}
+                  <button onClick={handleAddMember} disabled={addingMember} className="text-xs bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white px-3 py-1.5 rounded transition font-medium">
+                    {addingMember ? '생성 중...' : '계정 만들기'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1771,15 +1993,17 @@ export default function YouTubeAnalyzer() {
                         </div>
                         <p className="text-xs text-slate-500 mb-1.5">롱폼 {filterVideos(channel.videos, 'longform').length} · 미드 {filterVideos(channel.videos, 'mid').length} · 숏폼 {filterVideos(channel.videos, 'shorts').length}</p>
                         {channel.lastUpdated && <p className="text-xs text-slate-600 mb-2">{new Date(channel.lastUpdated).toLocaleDateString('ko-KR', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})} 갱신</p>}
-                        <div className="flex gap-1.5">
-                          <button onClick={(e) => { e.stopPropagation(); handleRefreshChannel(channel._id); }} disabled={refreshing[channel._id]} className="flex-1 bg-slate-700/80 hover:bg-blue-600 disabled:opacity-50 text-slate-300 hover:text-white text-xs py-1.5 rounded-lg transition flex items-center justify-center gap-1">
-                            {refreshing[channel._id] ? <Loader size={11} className="animate-spin" /> : <RefreshCw size={11} />}
-                            {refreshing[channel._id] ? '갱신 중' : '갱신'}
-                          </button>
-                          <button onClick={(e) => { e.stopPropagation(); handleDeleteChannel(channel._id); }} className="bg-slate-700/80 hover:bg-red-600/80 text-slate-400 hover:text-white p-1.5 rounded-lg transition">
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
+                        {!isViewingOther && (
+                          <div className="flex gap-1.5">
+                            <button onClick={(e) => { e.stopPropagation(); handleRefreshChannel(channel._id); }} disabled={refreshing[channel._id]} className="flex-1 bg-slate-700/80 hover:bg-blue-600 disabled:opacity-50 text-slate-300 hover:text-white text-xs py-1.5 rounded-lg transition flex items-center justify-center gap-1">
+                              {refreshing[channel._id] ? <Loader size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                              {refreshing[channel._id] ? '갱신 중' : '갱신'}
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); handleDeleteChannel(channel._id); }} className="bg-slate-700/80 hover:bg-red-600/80 text-slate-400 hover:text-white p-1.5 rounded-lg transition">
+                              <Trash2 size={13} />
+                            </button>
+                          </div>
+                        )}
                       </div>
                     );
                   });

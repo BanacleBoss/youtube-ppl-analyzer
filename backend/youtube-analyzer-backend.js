@@ -6,6 +6,8 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const ExcelJS = require('exceljs');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 // 필수 환경변수 누락 시 서버가 원인 불명의 에러로 조용히 실패하는 대신 명확히 알린다.
@@ -17,6 +19,15 @@ if (missingEnvVars.length > 0) {
   console.error('로컬: backend/.env 파일을 확인하세요.');
   console.error('배포(Render): 대시보드 → Environment 탭을 확인하세요.');
   console.error('========================================');
+}
+
+// 로그인 토큰(JWT) 서명용 비밀키. 배포 환경(Render)에는 반드시 JWT_SECRET을 설정해야 한다.
+// 설정하지 않으면 서버가 뜰 때마다 임시 키를 새로 생성하므로, 서버 재시작(배포/재배포 포함)마다
+// 발급된 토큰이 전부 무효화되어 모든 사용자가 재로그인해야 한다 — 동작은 하지만 불편하니 꼭 설정할 것.
+let JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  JWT_SECRET = crypto.randomBytes(32).toString('hex');
+  console.warn('[경고] JWT_SECRET 환경변수가 없어 임시 키로 시작합니다. Render 환경변수에 JWT_SECRET(임의의 긴 문자열)을 추가하는 것을 권장합니다.');
 }
 
 // 일부 네트워크(ISP/방화벽)에서 mongodb+srv의 DNS SRV 조회가 차단되는 경우가 있어
@@ -84,6 +95,11 @@ const channelSchema = new mongoose.Schema({
   channelThumbnail: { type: String, default: '' }, // 채널 목록에 실제 유튜브 프로필 사진을 보여주기 위한 썸네일 URL
   subscribers: Number,
   totalViews: Number,
+
+  // 담당자(계정) — 여러 팀원이 로그인해서 함께 쓰는 구조라, 이 채널을 누가 관리하는지 표시한다.
+  // ownerName은 화면에 바로 뿌리기 위한 비정규화 캐시(계정이 바뀌거나 삭제돼도 과거 표시가 깨지지 않도록).
+  ownerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  ownerName: { type: String, default: '' },
   
   // PPL 설정
   pplSettings: {
@@ -239,6 +255,19 @@ const itemSchema = new mongoose.Schema({
 
 const Item = mongoose.model('Item', itemSchema);
 
+// 사용자 계정 — 로그인 인증 및 "누가 어떤 채널을 담당하는지" 구분을 위한 모델.
+// 회원가입 폼은 없고 관리자가 직접 팀원 계정을 만들어 아이디/초기 비밀번호를 알려주는 방식이다.
+// 예외적으로, 이 서버에 사용자가 단 한 명도 없는 최초 상태에서만 /api/auth/setup-admin으로
+// 본인이 직접 첫 관리자 계정을 만들 수 있다 (그래야 아무도 관리자를 만들어 줄 수 없는 상황이 없다).
+const userSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+  passwordHash: { type: String, required: true },
+  role: { type: String, enum: ['admin', 'member'], default: 'member' },
+  createdAt: { type: Date, default: Date.now }
+});
+const User = mongoose.model('User', userSchema);
+
 // PPL 손익/BEP 계산 유틸
 function calculatePPLProfit(settings) {
   const sellPrice = Number(settings.productPrice) || 0;
@@ -358,6 +387,49 @@ function toPercentOrNull(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
   return Math.min(100, Math.max(0, n));
+}
+
+// ── 인증/권한 미들웨어 ──────────────────────────────────────────
+// Authorization: Bearer <token> 헤더의 JWT를 검증하고 req.user = { id, name, email, role }를 설정한다.
+// 로그인 없이 서비스가 전면 공개되어 있던 것을, 팀원별 계정 로그인이 있어야만 쓸 수 있게 막는 게이트.
+function requireAuth(req, res, next) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token) return res.status(401).json({ error: '로그인이 필요합니다' });
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: '로그인이 만료되었습니다. 다시 로그인해주세요' });
+  }
+}
+
+// requireAuth 다음에 붙여 관리자만 허용한다 (팀원 계정 생성 등).
+function requireAdmin(req, res, next) {
+  if (req.user?.role !== 'admin') return res.status(403).json({ error: '관리자만 가능한 작업입니다' });
+  next();
+}
+
+// 채널 조회는 팀 전체에 열려있지만(누구 채널인지 서로 볼 수 있어야 하니까), 수정/삭제/갱신 같은
+// 쓰기 작업은 그 채널의 담당자 본인 또는 관리자만 할 수 있도록 제한한다.
+// :id 또는 :channelId 파라미터 어느 쪽을 쓰는 라우트든 동작하도록 둘 다 확인한다.
+async function requireChannelOwner(req, res, next) {
+  try {
+    const channelId = req.params.id || req.params.channelId;
+    if (!mongoose.Types.ObjectId.isValid(channelId)) {
+      return res.status(400).json({ error: '잘못된 ID 형식입니다' });
+    }
+    const channel = await Channel.findById(channelId);
+    if (!channel) return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
+    const isOwner = channel.ownerId && channel.ownerId.toString() === req.user.id;
+    if (!isOwner && req.user.role !== 'admin') {
+      return res.status(403).json({ error: '이 채널의 담당자만 수정할 수 있습니다' });
+    }
+    req.channel = channel; // 핸들러에서 다시 조회하지 않도록 캐시
+    next();
+  } catch (e) {
+    return res.status(500).json({ error: e.message });
+  }
 }
 
 // 채널 갱신 시 영상 목록을 유튜브 API에서 통째로 새로 받아와 교체하는데,
@@ -590,8 +662,105 @@ app.param('id', (req, res, next, id) => {
   next();
 });
 
+// ── 인증 ──────────────────────────────────────────────────────
+// GET: 최초 셋업이 필요한지 확인 — 가입된 사용자가 한 명도 없으면 true.
+// 프론트는 이 값을 보고 "로그인 화면"과 "최초 관리자 계정 만들기 화면" 중 어느 걸 보여줄지 정한다.
+app.get('/api/auth/setup-status', async (req, res) => {
+  try {
+    const count = await User.countDocuments();
+    res.json({ needsSetup: count === 0 });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST: 최초 관리자 계정 생성 — 사용자가 한 명도 없을 때만 동작한다(그 이후엔 항상 거부).
+// 이후 팀원 계정은 이 관리자가 /api/users로 직접 만들어준다(공개 회원가입 폼은 없음).
+app.post('/api/auth/setup-admin', async (req, res) => {
+  try {
+    const count = await User.countDocuments();
+    if (count > 0) return res.status(403).json({ error: '이미 초기 설정이 완료되었습니다' });
+
+    const { name, email, password } = req.body;
+    if (!name || !email || !password) return res.status(400).json({ error: '이름/이메일/비밀번호를 모두 입력하세요' });
+    if (String(password).length < 8) return res.status(400).json({ error: '비밀번호는 8자 이상이어야 합니다' });
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await User.create({ name, email: String(email).toLowerCase().trim(), passwordHash, role: 'admin' });
+
+    // 지금까지 담당자 없이 등록되어 있던 채널은 전부 최초 관리자 소유로 지정한다(기존 데이터 이관).
+    await Channel.updateMany({ ownerId: null }, { $set: { ownerId: user._id, ownerName: user.name } });
+
+    const token = jwt.sign({ id: user._id.toString(), name: user.name, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role } });
+  } catch (error) {
+    if (error.code === 11000) return res.status(400).json({ error: '이미 사용 중인 이메일입니다' });
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST: 로그인
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: '이메일/비밀번호를 입력하세요' });
+
+    const user = await User.findOne({ email: String(email).toLowerCase().trim() });
+    if (!user) return res.status(401).json({ error: '이메일 또는 비밀번호가 올바르지 않습니다' });
+
+    const match = await bcrypt.compare(password, user.passwordHash);
+    if (!match) return res.status(401).json({ error: '이메일 또는 비밀번호가 올바르지 않습니다' });
+
+    const token = jwt.sign({ id: user._id.toString(), name: user.name, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, user: { id: user._id, name: user.name, email: user.email, role: user.role } });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET: 내 정보 (토큰 유효성 확인용으로 프론트 로드 시 호출)
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  res.json({ user: req.user });
+});
+
+// ── 팀원 관리 ─────────────────────────────────────────────────
+// GET: 팀원 목록(담당 채널 수 포함) — 로그인한 사람이면 누구나 조회 가능(서로 담당 채널을 볼 수 있어야 하니까)
+app.get('/api/users', requireAuth, async (req, res) => {
+  try {
+    const users = await User.find().select('-passwordHash').sort({ createdAt: 1 });
+    const counts = await Channel.aggregate([
+      { $match: { ownerId: { $ne: null } } },
+      { $group: { _id: '$ownerId', count: { $sum: 1 } } }
+    ]);
+    const countMap = new Map(counts.map(c => [c._id.toString(), c.count]));
+    res.json(users.map(u => ({
+      id: u._id, name: u.name, email: u.email, role: u.role, createdAt: u.createdAt,
+      channelCount: countMap.get(u._id.toString()) || 0
+    })));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST: 팀원 계정 생성 (관리자 전용) — 회원가입 폼 없이 관리자가 아이디/초기 비밀번호를 직접 발급한다.
+app.post('/api/users', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { name, email, password, role } = req.body;
+    if (!name || !email || !password) return res.status(400).json({ error: '이름/이메일/비밀번호를 모두 입력하세요' });
+    if (String(password).length < 8) return res.status(400).json({ error: '비밀번호는 8자 이상이어야 합니다' });
+    const allowedRole = role === 'admin' ? 'admin' : 'member';
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await User.create({ name, email: String(email).toLowerCase().trim(), passwordHash, role: allowedRole });
+    res.json({ id: user._id, name: user.name, email: user.email, role: user.role, channelCount: 0 });
+  } catch (error) {
+    if (error.code === 11000) return res.status(400).json({ error: '이미 사용 중인 이메일입니다' });
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // POST: 채널 추가
-app.post('/api/channels', async (req, res) => {
+app.post('/api/channels', requireAuth, async (req, res) => {
   try {
     const { channelId } = req.body;
 
@@ -621,6 +790,8 @@ app.post('/api/channels', async (req, res) => {
       channelKeywords: channelInfo.channelKeywords,
       channelPublishedAt: channelInfo.channelPublishedAt,
       videoCount: channelInfo.videoCount,
+      ownerId: req.user.id,
+      ownerName: req.user.name,
       pplSettings: {
         productPrice: 50000,
         expectedClicks: 0,
@@ -654,18 +825,31 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, ts: Date.now() });
 });
 
-// GET: 모든 채널 조회
-app.get('/api/channels', async (req, res) => {
+// GET: 채널 조회
+// 쿼리 없이 호출하면 "내 채널"만, ?ownerId=<사용자ID>로 특정 팀원의 채널을, ?ownerId=all(관리자 전용)로
+// 전체 채널을 조회한다. 팀원 목록에서 다른 사람 이름을 클릭했을 때 그 사람 채널로 전환하는 데 쓰인다.
+app.get('/api/channels', requireAuth, async (req, res) => {
   try {
-    const channels = await Channel.find().sort({ lastUpdated: -1 });
+    const { ownerId } = req.query;
+    let filter;
+    if (ownerId === 'all') {
+      if (req.user.role !== 'admin') return res.status(403).json({ error: '전체 채널 조회는 관리자만 가능합니다' });
+      filter = {};
+    } else if (ownerId) {
+      if (!mongoose.Types.ObjectId.isValid(ownerId)) return res.status(400).json({ error: '잘못된 ownerId 형식입니다' });
+      filter = { ownerId };
+    } else {
+      filter = { ownerId: req.user.id };
+    }
+    const channels = await Channel.find(filter).sort({ lastUpdated: -1 });
     res.json(channels);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// GET: 특정 채널 조회
-app.get('/api/channels/:id', async (req, res) => {
+// GET: 특정 채널 조회 — 조회는 팀 전체에 열려있다(수정/삭제만 담당자 제한).
+app.get('/api/channels/:id', requireAuth, async (req, res) => {
   try {
     const channel = await Channel.findById(req.params.id);
     if (!channel) {
@@ -678,7 +862,7 @@ app.get('/api/channels/:id', async (req, res) => {
 });
 
 // POST: 채널 데이터 새로고침
-app.post('/api/channels/:id/refresh', async (req, res) => {
+app.post('/api/channels/:id/refresh', requireAuth, requireChannelOwner, async (req, res) => {
   console.log(`[REFRESH] 요청 시작: ${req.params.id}`);
   try {
     const channel = await Channel.findById(req.params.id);
@@ -706,11 +890,12 @@ app.post('/api/channels/:id/refresh', async (req, res) => {
   }
 });
 
-// POST: 전체 채널 순차 갱신
-app.post('/api/channels/refresh-all', async (req, res) => {
+// POST: 전체 채널 순차 갱신 — 기본적으로 "내 채널"만 갱신하고, 관리자가 ?scope=all로 요청하면 전체를 갱신한다.
+app.post('/api/channels/refresh-all', requireAuth, async (req, res) => {
   console.log('[REFRESH-ALL] 전체 갱신 시작');
   try {
-    const channels = await Channel.find();
+    const filter = (req.user.role === 'admin' && req.query.scope === 'all') ? {} : { ownerId: req.user.id };
+    const channels = await Channel.find(filter);
     if (channels.length === 0) return res.json({ results: [], total: 0 });
 
     const results = [];
@@ -745,7 +930,7 @@ app.post('/api/channels/refresh-all', async (req, res) => {
 });
 
 // POST: PPL 설정 저장
-app.post('/api/channels/:id/settings', async (req, res) => {
+app.post('/api/channels/:id/settings', requireAuth, requireChannelOwner, async (req, res) => {
   try {
     const channel = await Channel.findById(req.params.id);
     if (!channel) {
@@ -816,7 +1001,7 @@ app.post('/api/channels/:id/settings', async (req, res) => {
 });
 
 // PATCH: 딜 조건 변경 이력 항목 수정 (예: 채널 생성 초기 placeholder 값이 잘못 기록된 경우 실제 값으로 정정)
-app.patch('/api/channels/:id/settings-history/:historyId', async (req, res) => {
+app.patch('/api/channels/:id/settings-history/:historyId', requireAuth, requireChannelOwner, async (req, res) => {
   try {
     const channel = await Channel.findById(req.params.id);
     if (!channel) return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
@@ -838,7 +1023,7 @@ app.patch('/api/channels/:id/settings-history/:historyId', async (req, res) => {
 });
 
 // DELETE: 딜 조건 변경 이력 항목 삭제 (잘못 기록된 항목 정리용)
-app.delete('/api/channels/:id/settings-history/:historyId', async (req, res) => {
+app.delete('/api/channels/:id/settings-history/:historyId', requireAuth, requireChannelOwner, async (req, res) => {
   try {
     const channel = await Channel.findById(req.params.id);
     if (!channel) return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
@@ -855,7 +1040,7 @@ app.delete('/api/channels/:id/settings-history/:historyId', async (req, res) => 
 });
 
 // DELETE: 채널 삭제
-app.delete('/api/channels/:id', async (req, res) => {
+app.delete('/api/channels/:id', requireAuth, requireChannelOwner, async (req, res) => {
   try {
     await Channel.findByIdAndDelete(req.params.id);
     res.json({ message: '채널이 삭제되었습니다' });
@@ -865,7 +1050,7 @@ app.delete('/api/channels/:id', async (req, res) => {
 });
 
 // PATCH: 채널 메타 정보 (상태/메모/태그) 업데이트
-app.patch('/api/channels/:id/meta', async (req, res) => {
+app.patch('/api/channels/:id/meta', requireAuth, requireChannelOwner, async (req, res) => {
   try {
     const { status, memo, channelTags, audienceProfile } = req.body;
     const channel = await Channel.findById(req.params.id);
@@ -904,7 +1089,7 @@ app.patch('/api/channels/:id/meta', async (req, res) => {
 });
 
 // POST: 캠페인 실적 기록 추가 (실제 판매수량/매출 — 향후 전환율 추정 정확도 개선용)
-app.post('/api/channels/:id/campaign-logs', async (req, res) => {
+app.post('/api/channels/:id/campaign-logs', requireAuth, requireChannelOwner, async (req, res) => {
   try {
     const channel = await Channel.findById(req.params.id);
     if (!channel) {
@@ -944,7 +1129,7 @@ app.post('/api/channels/:id/campaign-logs', async (req, res) => {
 });
 
 // DELETE: 캠페인 실적 기록 삭제
-app.delete('/api/channels/:channelId/campaign-logs/:logId', async (req, res) => {
+app.delete('/api/channels/:channelId/campaign-logs/:logId', requireAuth, requireChannelOwner, async (req, res) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(req.params.channelId)) {
       return res.status(400).json({ error: '잘못된 ID 형식입니다' });
@@ -968,7 +1153,7 @@ app.delete('/api/channels/:channelId/campaign-logs/:logId', async (req, res) => 
 // PATCH: 특정 영상을 "우리 캠페인 영상"으로 수동 표시/해제
 // isAd/hasPaidPromotion은 자동 감지(타 브랜드 광고 포함)라서, 우리가 실제로 집행한 캠페인인지는 별도로 표시해야 한다.
 // 채널 갱신 시 유튜브 API로 영상 목록을 통째로 새로 받아오므로, 이 값은 preserveOurCampaignFlags()로 갱신 후에도 보존된다.
-app.patch('/api/channels/:id/videos/:videoId/campaign-flag', async (req, res) => {
+app.patch('/api/channels/:id/videos/:videoId/campaign-flag', requireAuth, requireChannelOwner, async (req, res) => {
   try {
     const { ourCampaign } = req.body || {};
     const channel = await Channel.findById(req.params.id);
@@ -992,7 +1177,7 @@ app.patch('/api/channels/:id/videos/:videoId/campaign-flag', async (req, res) =>
 // internal: PPL 매출 분석(MG/BEP/ROI 등)까지 전체 포함
 
 // POST: 공유 링크 생성 (이미 있으면 기존 토큰을 그대로 반환 — 재생성 시 링크가 바뀌지 않도록)
-app.post('/api/channels/:id/share', async (req, res) => {
+app.post('/api/channels/:id/share', requireAuth, requireChannelOwner, async (req, res) => {
   try {
     const { type } = req.body || {};
     if (!['external', 'internal'].includes(type)) {
@@ -1014,7 +1199,7 @@ app.post('/api/channels/:id/share', async (req, res) => {
 });
 
 // DELETE: 공유 링크 비활성화 (링크가 유출됐을 때 즉시 차단하는 용도)
-app.delete('/api/channels/:id/share/:type', async (req, res) => {
+app.delete('/api/channels/:id/share/:type', requireAuth, requireChannelOwner, async (req, res) => {
   try {
     const { type } = req.params;
     if (!['external', 'internal'].includes(type)) {
@@ -1070,7 +1255,7 @@ app.get('/api/public/summary/:token', async (req, res) => {
 // ===== 품목(제품) 관리 API =====
 
 // POST: 품목 추가
-app.post('/api/items', async (req, res) => {
+app.post('/api/items', requireAuth, async (req, res) => {
   try {
     const { name, sellPrice, cost, shippingCost, giftCost, memo } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: '품목명을 입력하세요' });
@@ -1091,7 +1276,7 @@ app.post('/api/items', async (req, res) => {
 });
 
 // GET: 품목 목록 조회
-app.get('/api/items', async (req, res) => {
+app.get('/api/items', requireAuth, async (req, res) => {
   try {
     const items = await Item.find().sort({ name: 1 });
     res.json(items);
@@ -1101,7 +1286,7 @@ app.get('/api/items', async (req, res) => {
 });
 
 // PUT: 품목 수정
-app.put('/api/items/:id', async (req, res) => {
+app.put('/api/items/:id', requireAuth, async (req, res) => {
   try {
     const { name, sellPrice, cost, shippingCost, giftCost, memo } = req.body;
     const item = await Item.findById(req.params.id);
@@ -1123,7 +1308,7 @@ app.put('/api/items/:id', async (req, res) => {
 });
 
 // DELETE: 품목 삭제
-app.delete('/api/items/:id', async (req, res) => {
+app.delete('/api/items/:id', requireAuth, async (req, res) => {
   try {
     await Item.findByIdAndDelete(req.params.id);
     res.json({ message: '품목이 삭제되었습니다' });
@@ -1133,7 +1318,7 @@ app.delete('/api/items/:id', async (req, res) => {
 });
 
 // GET: Excel 다운로드
-app.get('/api/channels/:id/export', async (req, res) => {
+app.get('/api/channels/:id/export', requireAuth, async (req, res) => {
   try {
     const channel = await Channel.findById(req.params.id);
     if (!channel) {
@@ -1248,7 +1433,7 @@ app.get('/api/channels/:id/export', async (req, res) => {
 });
 
 // POST: 댓글 분석 (구매의도 + 품질 점수)
-app.post('/api/channels/:id/analyze-comments', async (req, res) => {
+app.post('/api/channels/:id/analyze-comments', requireAuth, requireChannelOwner, async (req, res) => {
   try {
     const channel = await Channel.findById(req.params.id);
     if (!channel) return res.status(404).json({ error: '채널을 찾을 수 없습니다' });
@@ -1331,7 +1516,7 @@ app.post('/api/channels/:id/analyze-comments', async (req, res) => {
 });
 
 // GET: 채널 검색 및 PPL 적합도 분석
-app.get('/api/search', async (req, res) => {
+app.get('/api/search', requireAuth, async (req, res) => {
   try {
     const { keyword } = req.query;
     if (!keyword) return res.status(400).json({ error: '검색어를 입력하세요' });
