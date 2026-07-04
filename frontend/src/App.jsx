@@ -395,109 +395,70 @@ export const calculateEfficiencyScore = (channel) => {
   };
 };
 
-// 🎯 상품-채널 매칭 점수 (0~100) — 카테고리 일치(30) + 키워드 일치(25) + 타깃 연령/성별 부합(20) + PPL 건강도(25)
-// 상품 또는 채널 쪽에 비교할 데이터가 없는 항목은 "감점"이 아니라 "중립 점수"로 처리한다
-// (기존 댓글 품질 보정 / 시청자 프로필 처리 방식과 동일한 원칙 — 데이터 부족이 곧 저품질을 의미하지 않기 때문).
-export const calculateProductChannelFit = (item, channel) => {
+// 🎯 상품-채널 발굴 적합도 (0~100) — 이미 등록된 채널이 아니라 YouTube 실시간 검색으로 새로 찾아낸
+// 채널 후보에 대해 계산한다. 검색 결과에는 audienceProfile/channelKeywords 같은 우리 DB 전용 데이터가
+// 없으므로, 채널명·소개글에 상품의 카테고리·매칭 키워드가 실제로 등장하는지(키워드 적합도)와
+// /api/search가 이미 산출해둔 예비 PPL 점수(구독자·인게이지먼트 체급별 상대비교·롱폼비중·활동성·국가)를
+// 함께 반영한다. 검색어 자체가 이미 카테고리/키워드로 필터링된 결과이므로 완전 무관 채널은 드물지만,
+// 여러 키워드로 검색한 결과를 합쳤을 때 어떤 채널이 "더 여러 키워드에 실제로 부합하는지" 구분하기 위함이다.
+export const calculateDiscoveryFit = (item, ch) => {
   const reasons = [];
-  const eff = calculateEfficiencyScore(channel);
-  const d = eff.details;
+  const terms = [...new Set([item.category, ...(item.matchKeywords || [])].map(t => (t || '').trim().toLowerCase()).filter(Boolean))];
 
-  // 1) 카테고리 일치 (30점)
-  const channelCategory = channel?.audienceProfile?.category || '';
-  let categoryScore;
-  if (item.category && channelCategory) {
-    categoryScore = item.category === channelCategory ? 30 : 5;
-    reasons.push(item.category === channelCategory ? `✅ 카테고리 일치 (${item.category})` : `⚠️ 카테고리 다름 (상품: ${item.category} / 채널: ${channelCategory})`);
+  // 1) 키워드 적합도 (50점) — 채널명 + 소개글에 상품의 카테고리/키워드가 실제로 등장하는 비율
+  let keywordScore = 25;
+  if (terms.length > 0) {
+    const text = `${ch.channelName || ''} ${ch.description || ''}`.toLowerCase();
+    const matched = terms.filter(t => text.includes(t));
+    keywordScore = Math.round((matched.length / terms.length) * 50);
+    reasons.push(matched.length > 0
+      ? `✅ 채널명/소개글에 "${matched.join(', ')}" 포함`
+      : '검색어가 채널명/소개글엔 안 보임 (유튜브 검색 연관도로만 매칭됨)');
   } else {
-    categoryScore = 15;
-    reasons.push('카테고리 정보 부족 — 중립 처리');
+    reasons.push('상품 카테고리/키워드 미입력 — 검색 연관도만으로 매칭');
   }
 
-  // 2) 키워드 겹침 (25점) — 채널명 + 채널 키워드 텍스트에 상품 매칭 키워드가 포함되는지 확인
-  const keywords = (item.matchKeywords || []).map(k => k.toLowerCase().trim()).filter(Boolean);
-  let keywordScore;
-  if (keywords.length > 0) {
-    const channelText = `${channel.channelName || ''} ${(channel.channelKeywords || []).join(' ')}`.toLowerCase();
-    const matched = keywords.filter(k => channelText.includes(k));
-    keywordScore = Math.round((matched.length / keywords.length) * 25);
-    reasons.push(matched.length > 0 ? `✅ 키워드 ${matched.length}/${keywords.length}개 일치 (${matched.join(', ')})` : '일치하는 키워드 없음');
-  } else {
-    keywordScore = 12;
-    reasons.push('상품 키워드 미입력 — 중립 처리');
-  }
+  // 2) PPL 적합도 (50점) — /api/search가 계산한 예비 점수(구독자·체급별 인게이지먼트·롱폼비중·최근활동·국가)를 스케일링
+  const pplComponent = Math.round((ch.pplScore || 0) / 2);
+  reasons.push(`PPL 예비점수 ${ch.pplScore ?? 0}/100 (구독자·인게이지먼트·롱폼비중·활동성·국가 기준)`);
 
-  // 3) 타깃 연령/성별 부합 (20점) — 채널의 수동 입력 시청자 프로필(audienceProfile)과 비교
-  const ap = channel?.audienceProfile;
-  const AGE_KEYS = ['age1824', 'age2534', 'age3544', 'age4554', 'age5564'];
-  const hasTargetAge = (item.targetAges || []).length > 0;
-  const hasChannelAgeData = !!(ap && AGE_KEYS.some(k => ap[k] != null));
-  let ageRatio = 0.5;
-  if (hasTargetAge && hasChannelAgeData) {
-    const coverage = (item.targetAges || []).reduce((s, key) => s + (ap[key] || 0), 0);
-    ageRatio = Math.min(1, coverage / 100);
-    reasons.push(`타깃 연령대 시청자 비율 합계 ${coverage.toFixed(0)}%`);
-  } else if (hasTargetAge) {
-    reasons.push('채널 연령대 데이터 없음 — 중립 처리');
-  }
-  const hasTargetGender = !!item.targetGender && item.targetGender !== '무관';
-  const hasChannelGenderData = !!(ap && (ap.genderMale != null || ap.genderFemale != null));
-  let genderRatio = 0.5;
-  if (hasTargetGender && hasChannelGenderData) {
-    const pct = item.targetGender === '남성' ? (ap.genderMale ?? 0) : (ap.genderFemale ?? 0);
-    genderRatio = Math.min(1, pct / 100);
-    reasons.push(`타깃 성별(${item.targetGender}) 시청자 비율 ${pct}%`);
-  } else if (hasTargetGender) {
-    reasons.push('채널 성별 데이터 없음 — 중립 처리');
-  }
-  const demoScore = Math.round((ageRatio * 0.6 + genderRatio * 0.4) * 20);
-
-  // 4) PPL 건강도 (25점) — 채널 자체 효율점수와 광고비율 점수를 활용 (항상 계산 가능한 값)
-  const pplHealthScore = Math.round((eff.total / 100) * 15) + (d.adScore || 0);
-  reasons.push(`채널 효율점수 ${eff.total}/100, 광고비율 ${d.adRatio}%(${d.adScore}/10점)`);
-
-  const total = Math.max(0, Math.min(100, categoryScore + keywordScore + demoScore + pplHealthScore));
+  const total = Math.max(0, Math.min(100, keywordScore + pplComponent));
   return {
     total,
-    breakdown: { categoryScore, keywordScore, demoScore, pplHealthScore },
+    breakdown: { keywordScore, pplComponent },
     reasons,
-    tier: getEngagementBenchmark(channel.subscribers).tier,
+    tier: getEngagementBenchmark(ch.subscribers).tier,
   };
 };
 
-// 품목 등록 폼에서 "🎯 이 품목에 맞는 채널 추천"을 눌렀을 때 표시되는 구간별(나노~메가) 상위 5개 추천 목록.
-// allChannels가 null이면 아직 안 불러온 상태(버튼 처음 클릭 전), []이면 로딩 완료 후 채널이 없는 상태.
-const ProductChannelRecommendations = ({ item, allChannels, loading, onSelectChannel }) => {
-  if (loading) {
+// 품목 등록 폼에서 "🎯 이 품목에 맞는 채널 추천"을 눌렀을 때 표시되는, YouTube에서 새로 찾은
+// 구간별(나노~메가) 상위 5개 후보 목록. result가 없으면(버튼 처음 클릭 전) 아무것도 렌더링하지 않는다.
+const ProductChannelRecommendations = ({ item, result, alreadyAddedMap, onAddChannel, onJumpToChannel, addingChannelId }) => {
+  if (!result) return null;
+  if (result.loading) {
     return (
       <div className="mt-3 flex items-center gap-2 text-slate-400 text-sm">
-        <Loader size={14} className="animate-spin" /> 전체 채널 불러오는 중...
+        <Loader size={14} className="animate-spin" /> 유튜브에서 관련 채널 검색 중... ({(result.searchedTerms || []).join(', ')})
       </div>
     );
   }
-  if (!allChannels) return null;
-  if (allChannels.length === 0) {
-    return <p className="mt-3 text-slate-500 text-sm">등록된 채널이 없습니다.</p>;
+  if (result.error === 'NO_TERMS') {
+    return <p className="mt-3 text-yellow-400 text-xs">⚠️ 카테고리 또는 매칭 키워드를 최소 1개 이상 입력해야 유튜브에서 검색할 채널을 찾을 수 있습니다.</p>;
   }
-  const hasAnyMatchInfo = item.category || (item.matchKeywords || []).length > 0 || (item.targetAges || []).length > 0 || item.targetGender;
-  const ranked = allChannels.map(ch => ({ channel: ch, fit: calculateProductChannelFit(item, ch) }));
-  const byTier = {};
-  ENGAGEMENT_BENCHMARKS.forEach(b => { byTier[b.tier] = []; });
-  ranked.forEach(r => {
-    const t = r.fit.tier;
-    if (!byTier[t]) byTier[t] = [];
-    byTier[t].push(r);
-  });
-  Object.keys(byTier).forEach(t => byTier[t].sort((a, b) => b.fit.total - a.fit.total));
+  if (result.error) {
+    return <p className="mt-3 text-red-400 text-xs">검색 실패: {result.error}</p>;
+  }
+  const byTier = result.tiers || {};
+  const totalCount = Object.values(byTier).reduce((s, list) => s + list.length, 0);
+  if (totalCount === 0) {
+    return <p className="mt-3 text-slate-500 text-sm">"{(result.searchedTerms || []).join(', ')}" 검색어로 유튜브에서 채널을 찾지 못했습니다.</p>;
+  }
 
   return (
     <div className="mt-3 bg-slate-800/80 border border-emerald-700/40 rounded-lg p-3 space-y-3">
       <p className="text-slate-400 text-[11px]">
-        근거: 카테고리 일치(30점) + 매칭 키워드(25점) + 타깃 연령·성별 부합(20점) + 채널 효율점수·광고비율(25점) 합산 · 각 구간(나노~메가)별 상위 5개
+        근거: "{(result.searchedTerms || []).join(', ')}" 키워드로 유튜브 실시간 검색 → 키워드 적합도(50점) + PPL 예비점수(50점) 합산 · 각 구간(나노~메가)별 상위 5개 · 이미 등록된 채널이 아닌 <span className="text-white">신규 채널</span>을 찾습니다
       </p>
-      {!hasAnyMatchInfo && (
-        <p className="text-yellow-400 text-xs">⚠️ 이 품목에 카테고리/키워드/타깃 정보가 입력되지 않아 대부분 중립 점수로 계산됩니다. 위 "채널 추천용 정보"를 입력하면 더 정확해집니다.</p>
-      )}
       {ENGAGEMENT_BENCHMARKS.map(b => {
         const list = (byTier[b.tier] || []).slice(0, 5);
         if (list.length === 0) return null;
@@ -505,15 +466,31 @@ const ProductChannelRecommendations = ({ item, allChannels, loading, onSelectCha
           <div key={b.tier}>
             <p className="text-slate-300 text-xs font-semibold mb-1.5">{b.tier}</p>
             <div className="space-y-1.5">
-              {list.map(({ channel: ch, fit }) => (
-                <button key={ch._id} onClick={() => onSelectChannel(ch)} className="w-full text-left bg-slate-700/60 hover:bg-slate-700 rounded p-2 transition">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-white text-xs font-medium truncate">{ch.channelName}</span>
-                    <span className={`text-xs font-bold flex-shrink-0 ${fit.total >= 70 ? 'text-green-400' : fit.total >= 40 ? 'text-yellow-400' : 'text-red-400'}`}>{fit.total}점</span>
+              {list.map(({ channel: ch, fit }) => {
+                const addedChannel = alreadyAddedMap?.get(ch.channelId);
+                return (
+                  <div key={ch.channelId} className="bg-slate-700/60 rounded p-2 flex items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-white text-xs font-medium truncate">{ch.channelName}</span>
+                        <span className={`text-xs font-bold flex-shrink-0 ${fit.total >= 70 ? 'text-green-400' : fit.total >= 40 ? 'text-yellow-400' : 'text-red-400'}`}>{fit.total}점</span>
+                        {addedChannel && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/40 flex-shrink-0">✓ 이미 추가됨</span>}
+                      </div>
+                      <p className="text-slate-500 text-[10px] mt-0.5">구독자 {formatKoreanCount(ch.subscribers)}명 · {fit.reasons.join(' · ')}</p>
+                    </div>
+                    {addedChannel ? (
+                      <button onClick={() => onJumpToChannel(addedChannel)} className="flex-shrink-0 bg-slate-600 hover:bg-slate-500 text-white text-[10px] px-2 py-1 rounded transition whitespace-nowrap">
+                        채널 보기 →
+                      </button>
+                    ) : (
+                      <button onClick={() => onAddChannel(ch.channelId, ch.channelName)} disabled={addingChannelId === ch.channelId}
+                        className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white text-[10px] px-2 py-1 rounded transition whitespace-nowrap">
+                        {addingChannelId === ch.channelId ? <Loader size={11} className="animate-spin" /> : '+ 분석 추가'}
+                      </button>
+                    )}
                   </div>
-                  <p className="text-slate-500 text-[10px] mt-0.5">구독자 {formatKoreanCount(ch.subscribers)}명 · {fit.reasons.join(' · ')}</p>
-                </button>
-              ))}
+                );
+              })}
             </div>
           </div>
         );
@@ -568,8 +545,10 @@ export default function YouTubeAnalyzer() {
 
   // 품목-채널 추천 (🎯 채널 추천 기능)
   const [recommendingItemId, setRecommendingItemId] = useState(null);
-  const [allChannelsForMatching, setAllChannelsForMatching] = useState(null); // null=미로딩, [] 이상=로딩됨
+  const [allChannelsForMatching, setAllChannelsForMatching] = useState(null); // null=미로딩, [] 이상=로딩됨 — "이미 추가된 채널" 표시용 (팀 전체)
   const [loadingAllChannels, setLoadingAllChannels] = useState(false);
+  const [productDiscoveryResults, setProductDiscoveryResults] = useState({}); // itemId -> { loading, error, tiers, searchedTerms }
+  const [addingDiscoveredChannelId, setAddingDiscoveredChannelId] = useState(null);
 
   // 캠페인 실적 기록
   const [campaignLogForm, setCampaignLogForm] = useState({ date: '', actualQty: '', actualRevenue: '', totalMG: '', videoId: '', note: '' });
@@ -840,26 +819,76 @@ export default function YouTubeAnalyzer() {
     }
   };
 
-  // 🎯 채널 추천 — 이 품목과 맞는 채널을 찾으려면 "내 채널"뿐 아니라 팀 전체 채널을 봐야 하므로
-  // 별도로 전체 채널을 한 번만 불러와 캐시해둔다 (열 때마다 다시 불러오지 않음).
-  const handleOpenRecommend = async (itemId) => {
+  // 🎯 채널 추천 — "이미 등록된 채널 중에서 고르기"가 아니라, 품목의 카테고리/매칭 키워드를 검색어로
+  // 삼아 유튜브에서 실시간으로 새로운 채널 후보를 찾는다(기존 "🔍 PPL 채널 발굴" 탭과 같은 검색 API 재사용).
+  // 검색 결과는 itemId별로 캐시해서 같은 품목을 다시 열 때 API 쿼터를 또 쓰지 않도록 한다.
+  // "이미 추가된 채널" 표시를 위해 팀 전체 채널 목록도 한 번만 불러와 캐시한다.
+  const handleOpenRecommend = async (item) => {
+    const itemId = item._id;
     if (recommendingItemId === itemId) { setRecommendingItemId(null); return; }
     setRecommendingItemId(itemId);
+
     if (allChannelsForMatching === null) {
       setLoadingAllChannels(true);
-      try {
-        const data = await getChannels('all');
-        setAllChannelsForMatching(data);
-      } catch (err) {
-        setError('전체 채널 목록을 불러오지 못했습니다: ' + (err.response?.data?.error || err.message));
-        setAllChannelsForMatching([]);
-      } finally {
-        setLoadingAllChannels(false);
-      }
+      getChannels('all')
+        .then(data => setAllChannelsForMatching(data))
+        .catch(() => setAllChannelsForMatching([]))
+        .finally(() => setLoadingAllChannels(false));
+    }
+
+    if (productDiscoveryResults[itemId]) return; // 이미 검색해둔 결과가 있으면 재검색하지 않음
+
+    const searchTerms = [...new Set([item.category, ...(item.matchKeywords || [])].map(t => (t || '').trim()).filter(Boolean))].slice(0, 4);
+    if (searchTerms.length === 0) {
+      setProductDiscoveryResults(prev => ({ ...prev, [itemId]: { loading: false, error: 'NO_TERMS', tiers: {}, searchedTerms: [] } }));
+      return;
+    }
+
+    setProductDiscoveryResults(prev => ({ ...prev, [itemId]: { loading: true, error: null, tiers: {}, searchedTerms: searchTerms } }));
+    try {
+      const resultsPerTerm = await Promise.all(searchTerms.map(term => searchChannels(term).catch(() => [])));
+      const merged = new Map();
+      resultsPerTerm.forEach(list => {
+        (list || []).forEach(ch => {
+          const existing = merged.get(ch.channelId);
+          if (!existing || ch.pplScore > existing.pplScore) merged.set(ch.channelId, ch);
+        });
+      });
+      const byTier = {};
+      ENGAGEMENT_BENCHMARKS.forEach(b => { byTier[b.tier] = []; });
+      Array.from(merged.values()).forEach(ch => {
+        const fit = calculateDiscoveryFit(item, ch);
+        if (!byTier[fit.tier]) byTier[fit.tier] = [];
+        byTier[fit.tier].push({ channel: ch, fit });
+      });
+      Object.keys(byTier).forEach(t => byTier[t].sort((a, b) => b.fit.total - a.fit.total));
+      setProductDiscoveryResults(prev => ({ ...prev, [itemId]: { loading: false, error: null, tiers: byTier, searchedTerms: searchTerms } }));
+    } catch (err) {
+      setProductDiscoveryResults(prev => ({ ...prev, [itemId]: { loading: false, error: err.response?.data?.error || err.message, tiers: {}, searchedTerms: searchTerms } }));
     }
   };
 
-  // 추천 결과에서 채널을 클릭하면 요약 탭으로 이동한다. 다른 팀원 소유 채널일 수도 있으므로
+  // 추천 목록에서 아직 등록되지 않은 채널을 "+ 분석 추가" 하면 바로 정식 채널로 추가하고 요약 탭으로 이동한다.
+  const handleAddDiscoveredChannel = async (channelId, channelName) => {
+    setAddingDiscoveredChannelId(channelId);
+    try {
+      setError(null);
+      const newChannel = await addChannel(channelId);
+      setChannels(prev => [...prev, newChannel]);
+      setAllChannelsForMatching(prev => prev ? [...prev, newChannel] : prev);
+      setSelectedChannelId(newChannel._id);
+      setShowItemManager(false);
+      setRecommendingItemId(null);
+      setActiveTab('summary');
+      setError(`✓ ${channelName} 채널이 추가됐습니다`);
+    } catch (err) {
+      setError('채널 추가 실패: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setAddingDiscoveredChannelId(null);
+    }
+  };
+
+  // 이미 추가돼있던 채널이면 바로 요약 탭으로 이동한다. 다른 팀원 소유 채널일 수도 있으므로
   // 필요하면 "보는 중" 컨텍스트(viewingOwner)도 함께 전환해줘야 화면에 제대로 뜬다.
   const handleJumpToChannel = (channel) => {
     const ownerIdStr = channel.ownerId ? String(channel.ownerId) : null;
@@ -2122,12 +2151,19 @@ export default function YouTubeAnalyzer() {
                         {item.descriptionUrl && <a href={item.descriptionUrl} target="_blank" rel="noreferrer" className="text-xs text-blue-400 hover:underline">🔗 설명 페이지</a>}
                       </div>
                     )}
-                    <button onClick={() => handleOpenRecommend(item._id)} className={`text-xs px-3 py-1.5 rounded transition font-medium ${recommendingItemId === item._id ? 'bg-emerald-600 text-white' : 'bg-emerald-700/50 hover:bg-emerald-600/70 text-white'}`}>
-                      🎯 {recommendingItemId === item._id ? '채널 추천 닫기' : '이 품목에 맞는 채널 추천'}
+                    <button onClick={() => handleOpenRecommend(item)} className={`text-xs px-3 py-1.5 rounded transition font-medium ${recommendingItemId === item._id ? 'bg-emerald-600 text-white' : 'bg-emerald-700/50 hover:bg-emerald-600/70 text-white'}`}>
+                      🎯 {recommendingItemId === item._id ? '채널 추천 닫기' : '유튜브에서 맞는 채널 찾기'}
                     </button>
 
                     {recommendingItemId === item._id && (
-                      <ProductChannelRecommendations item={item} allChannels={allChannelsForMatching} loading={loadingAllChannels} onSelectChannel={handleJumpToChannel} />
+                      <ProductChannelRecommendations
+                        item={item}
+                        result={productDiscoveryResults[item._id]}
+                        alreadyAddedMap={allChannelsForMatching ? new Map(allChannelsForMatching.map(ch => [ch.channelId, ch])) : new Map()}
+                        onAddChannel={handleAddDiscoveredChannel}
+                        onJumpToChannel={handleJumpToChannel}
+                        addingChannelId={addingDiscoveredChannelId}
+                      />
                     )}
                   </div>
                 ))}
@@ -3949,17 +3985,15 @@ export default function YouTubeAnalyzer() {
                 </div>
               </section>
 
-              {/* 상품-채널 추천 매칭 */}
+              {/* 상품-채널 추천 (유튜브 실시간 검색) */}
               <section>
-                <h3 className="text-emerald-400 font-bold text-base mb-3">🎯 품목별 채널 추천, 어떻게 계산하나요?</h3>
+                <h3 className="text-emerald-400 font-bold text-base mb-3">🎯 유튜브에서 맞는 채널 찾기, 어떻게 계산하나요?</h3>
                 <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 space-y-3">
-                  <p className="text-slate-300">품목관리에서 상품에 <span className="text-white font-semibold">카테고리 · 매칭 키워드 · 타깃 연령/성별</span>을 입력해두면, "🎯 이 품목에 맞는 채널 추천" 버튼으로 전체 팀 채널 중 이 상품과 궁합이 좋은 채널을 구독자 구간(나노~메가)별 상위 5개씩 뽑아 보여줍니다.</p>
+                  <p className="text-slate-300">이 기능은 <span className="text-white font-semibold">이미 등록된 채널 중에서 고르는 게 아니라</span>, 품목에 입력한 카테고리·매칭 키워드를 검색어로 삼아 <span className="text-white font-semibold">유튜브를 실시간으로 검색해서 아직 등록하지 않은 새 채널 후보</span>를 찾아줍니다. 품목관리에서 카테고리·매칭 키워드를 입력한 뒤 "🎯 유튜브에서 맞는 채널 찾기" 버튼을 누르면, 검색된 채널을 구독자 구간(나노~메가)별 상위 5개씩 점수순으로 보여줍니다.</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {[
-                      { label:'카테고리 일치 (30점)', desc:'상품 카테고리와 채널의 시청자 프로필 카테고리가 같으면 만점, 다르면 낮은 점수.' },
-                      { label:'매칭 키워드 (25점)', desc:'입력한 키워드가 채널명·채널 키워드에 포함된 비율만큼 점수 부여.' },
-                      { label:'타깃 연령·성별 (20점)', desc:'채널의 시청자 프로필(수동 입력) 중 타깃 연령대·성별 비율이 높을수록 고득점.' },
-                      { label:'PPL 건강도 (25점)', desc:'그 채널의 효율 점수(위 참고)와 광고 비율 점수를 반영 — 항상 계산 가능한 값.' },
+                      { label:'키워드 적합도 (50점)', desc:'입력한 카테고리·매칭 키워드가 그 채널의 이름/소개글에 실제로 등장하는 비율만큼 점수 부여.' },
+                      { label:'PPL 예비점수 (50점)', desc:'"🔍 PPL 채널 발굴" 탭과 동일한 로직 — 구독자 규모, 체급별 상대 인게이지먼트, 롱폼 비중, 최근 활동, 국가를 종합한 예비 점수를 반영.' },
                     ].map(item => (
                       <div key={item.label} className="bg-slate-700/60 rounded p-2">
                         <p className="text-white text-xs font-semibold">{item.label}</p>
@@ -3968,9 +4002,10 @@ export default function YouTubeAnalyzer() {
                     ))}
                   </div>
                   <div className="bg-yellow-900/20 border border-yellow-700/40 rounded p-3 space-y-1.5">
-                    <p className="text-yellow-300 text-xs">⚠️ 상품 또는 채널 쪽에 비교할 정보가 없으면(카테고리 미입력, 시청자 프로필 미입력 등) 감점이 아니라 중립 점수로 처리됩니다. 정보를 많이 입력할수록 추천 정확도가 올라갑니다.</p>
-                    <p className="text-yellow-300 text-xs">🔗 "상품 설명 URL"은 참고용 링크로만 저장되며, 자동으로 페이지 내용을 읽어와 분석하지 않습니다. 실제 매칭에 쓰이는 것은 직접 입력한 카테고리·키워드·타깃 정보입니다.</p>
-                    <p className="text-yellow-300 text-xs">각 추천 채널 카드에는 점수 산출 근거(어느 항목에서 몇 점을 받았는지)가 그대로 표시되며, 클릭하면 해당 채널의 요약 화면으로 바로 이동합니다.</p>
+                    <p className="text-yellow-300 text-xs">🔍 카테고리 + 매칭 키워드를 각각 검색어로 써서 유튜브 채널 검색 API를 호출합니다(최대 4개 검색어). 결과를 합쳐 중복을 제거한 뒤 점수순으로 정렬합니다. 카테고리/키워드를 입력하지 않으면 검색할 수 없다는 안내가 표시됩니다.</p>
+                    <p className="text-yellow-300 text-xs">🔗 "상품 설명 URL"은 참고용 링크로만 저장되며, 자동으로 페이지 내용을 읽어와 분석하지 않습니다. 실제 검색어로 쓰이는 것은 직접 입력한 카테고리·매칭 키워드입니다.</p>
+                    <p className="text-yellow-300 text-xs">이미 팀에 등록된 채널이 검색 결과에 나오면 "✓ 이미 추가됨" 배지와 함께 "채널 보기" 버튼이, 아직 등록 안 된 채널이면 "+ 분석 추가" 버튼이 표시됩니다. 각 채널 카드에는 점수 산출 근거가 그대로 표시됩니다.</p>
+                    <p className="text-yellow-300 text-xs">⚠️ 같은 품목을 다시 열면 유튜브 API 쿼터 절약을 위해 새로 검색하지 않고 이전 검색 결과를 그대로 보여줍니다. 키워드를 바꾼 뒤 최신 결과를 보려면 페이지를 새로고침하세요.</p>
                   </div>
                 </div>
               </section>
