@@ -433,7 +433,7 @@ export const calculateDiscoveryFit = (item, ch) => {
 
 // 품목 등록 폼에서 "🎯 이 품목에 맞는 채널 추천"을 눌렀을 때 표시되는, YouTube에서 새로 찾은
 // 구간별(나노~메가) 상위 5개 후보 목록. result가 없으면(버튼 처음 클릭 전) 아무것도 렌더링하지 않는다.
-const ProductChannelRecommendations = ({ result, alreadyAddedMap, onAddChannel, onJumpToChannel, addingChannelId }) => {
+const ProductChannelRecommendations = ({ result, onAddChannel, addingChannelId }) => {
   if (!result) return null;
   if (result.loading) {
     return (
@@ -450,14 +450,15 @@ const ProductChannelRecommendations = ({ result, alreadyAddedMap, onAddChannel, 
   }
   const byTier = result.tiers || {};
   const totalCount = Object.values(byTier).reduce((s, list) => s + list.length, 0);
+  const excludedNote = result.excludedCount > 0 ? ` (이미 등록된 채널 ${result.excludedCount}개는 제외)` : '';
   if (totalCount === 0) {
-    return <p className="mt-3 text-slate-500 text-sm">"{(result.searchedTerms || []).join(', ')}" 검색어로 유튜브에서 채널을 찾지 못했습니다.</p>;
+    return <p className="mt-3 text-slate-500 text-sm">"{(result.searchedTerms || []).join(', ')}" 검색 결과 중 신규 채널이 없습니다{excludedNote}. 검색된 채널이 이미 전부 등록되어 있거나, 검색어를 더 추가하면 새로운 후보가 나올 수 있습니다.</p>;
   }
 
   return (
     <div className="mt-3 bg-slate-800/80 border border-emerald-700/40 rounded-lg p-3 space-y-3">
       <p className="text-slate-400 text-[11px]">
-        근거: "{(result.searchedTerms || []).join(', ')}" 키워드로 유튜브 실시간 검색 → 키워드 적합도(50점) + PPL 예비점수(50점) 합산 · 각 구간(나노~메가)별 상위 5개 · 이미 등록된 채널이 아닌 <span className="text-white">신규 채널</span>을 찾습니다
+        근거: "{(result.searchedTerms || []).join(', ')}" 키워드로 유튜브 실시간 검색 → 키워드 적합도(50점) + PPL 예비점수(50점) 합산 · 각 구간(나노~메가)별 상위 5개 · <span className="text-white">이미 등록된 채널은 제외</span>{excludedNote}
       </p>
       {ENGAGEMENT_BENCHMARKS.map(b => {
         const list = (byTier[b.tier] || []).slice(0, 5);
@@ -466,31 +467,21 @@ const ProductChannelRecommendations = ({ result, alreadyAddedMap, onAddChannel, 
           <div key={b.tier}>
             <p className="text-slate-300 text-xs font-semibold mb-1.5">{b.tier}</p>
             <div className="space-y-1.5">
-              {list.map(({ channel: ch, fit }) => {
-                const addedChannel = alreadyAddedMap?.get(ch.channelId);
-                return (
-                  <div key={ch.channelId} className="bg-slate-700/60 rounded p-2 flex items-start gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-white text-xs font-medium truncate">{ch.channelName}</span>
-                        <span className={`text-xs font-bold flex-shrink-0 ${fit.total >= 70 ? 'text-green-400' : fit.total >= 40 ? 'text-yellow-400' : 'text-red-400'}`}>{fit.total}점</span>
-                        {addedChannel && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/40 flex-shrink-0">✓ 이미 추가됨</span>}
-                      </div>
-                      <p className="text-slate-500 text-[10px] mt-0.5">구독자 {formatKoreanCount(ch.subscribers)}명 · {fit.reasons.join(' · ')}</p>
+              {list.map(({ channel: ch, fit }) => (
+                <div key={ch.channelId} className="bg-slate-700/60 rounded p-2 flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-white text-xs font-medium truncate">{ch.channelName}</span>
+                      <span className={`text-xs font-bold flex-shrink-0 ${fit.total >= 70 ? 'text-green-400' : fit.total >= 40 ? 'text-yellow-400' : 'text-red-400'}`}>{fit.total}점</span>
                     </div>
-                    {addedChannel ? (
-                      <button onClick={() => onJumpToChannel(addedChannel)} className="flex-shrink-0 bg-slate-600 hover:bg-slate-500 text-white text-[10px] px-2 py-1 rounded transition whitespace-nowrap">
-                        채널 보기 →
-                      </button>
-                    ) : (
-                      <button onClick={() => onAddChannel(ch.channelId, ch.channelName)} disabled={addingChannelId === ch.channelId}
-                        className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white text-[10px] px-2 py-1 rounded transition whitespace-nowrap">
-                        {addingChannelId === ch.channelId ? <Loader size={11} className="animate-spin" /> : '+ 분석 추가'}
-                      </button>
-                    )}
+                    <p className="text-slate-500 text-[10px] mt-0.5">구독자 {formatKoreanCount(ch.subscribers)}명 · {fit.reasons.join(' · ')}</p>
                   </div>
-                );
-              })}
+                  <button onClick={() => onAddChannel(ch.channelId, ch.channelName)} disabled={addingChannelId === ch.channelId}
+                    className="flex-shrink-0 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white text-[10px] px-2 py-1 rounded transition whitespace-nowrap">
+                    {addingChannelId === ch.channelId ? <Loader size={11} className="animate-spin" /> : '+ 분석 추가'}
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
         );
@@ -819,20 +810,23 @@ export default function YouTubeAnalyzer() {
     }
   };
 
-  // 🎯 채널 추천 — "이미 등록된 채널 중에서 고르기"가 아니라, 품목의 카테고리/매칭 키워드를 검색어로
-  // 삼아 유튜브에서 실시간으로 새로운 채널 후보를 찾는다(기존 "🔍 PPL 채널 발굴" 탭과 같은 검색 API 재사용).
+  // 🎯 채널 추천 — 품목의 카테고리/매칭 키워드를 검색어로 삼아 유튜브에서 실시간으로 채널을 찾은 뒤,
+  // 팀에 "이미 등록된 채널"은 결과에서 완전히 제외하고 진짜 신규 채널만 보여준다.
+  // (제외하지 않으면, 원래 그 키워드로 처음 채널을 찾을 때 등록했던 채널들이 검색해도 계속 상위권에
+  // 나와서 추천 슬롯을 차지해버리는 문제가 있었음 — 추천의 목적은 "아직 안 본 채널을 찾는 것"이므로 제외함.)
   // 검색 결과는 itemId별로 캐시해서 같은 품목을 다시 열 때 API 쿼터를 또 쓰지 않도록 한다.
-  // "이미 추가된 채널" 표시를 위해 팀 전체 채널 목록도 한 번만 불러와 캐시한다.
   const handleOpenRecommend = async (item) => {
     const itemId = item._id;
     if (recommendingItemId === itemId) { setRecommendingItemId(null); return; }
     setRecommendingItemId(itemId);
 
+    // "이미 등록된 채널" 제외 판정에 팀 전체 채널 목록이 필요하므로, 캐시가 없으면 지금 불러온다.
+    let allChannelsPromise = Promise.resolve(allChannelsForMatching);
     if (allChannelsForMatching === null) {
       setLoadingAllChannels(true);
-      getChannels('all')
-        .then(data => setAllChannelsForMatching(data))
-        .catch(() => setAllChannelsForMatching([]))
+      allChannelsPromise = getChannels('all')
+        .then(data => { setAllChannelsForMatching(data); return data; })
+        .catch(() => { setAllChannelsForMatching([]); return []; })
         .finally(() => setLoadingAllChannels(false));
     }
 
@@ -840,13 +834,17 @@ export default function YouTubeAnalyzer() {
 
     const searchTerms = [...new Set([item.category, ...(item.matchKeywords || [])].map(t => (t || '').trim()).filter(Boolean))].slice(0, 4);
     if (searchTerms.length === 0) {
-      setProductDiscoveryResults(prev => ({ ...prev, [itemId]: { loading: false, error: 'NO_TERMS', tiers: {}, searchedTerms: [] } }));
+      setProductDiscoveryResults(prev => ({ ...prev, [itemId]: { loading: false, error: 'NO_TERMS', tiers: {}, searchedTerms: [], excludedCount: 0 } }));
       return;
     }
 
-    setProductDiscoveryResults(prev => ({ ...prev, [itemId]: { loading: true, error: null, tiers: {}, searchedTerms: searchTerms } }));
+    setProductDiscoveryResults(prev => ({ ...prev, [itemId]: { loading: true, error: null, tiers: {}, searchedTerms: searchTerms, excludedCount: 0 } }));
     try {
-      const resultsPerTerm = await Promise.all(searchTerms.map(term => searchChannels(term).catch(() => [])));
+      const [resultsPerTerm, existingChannels] = await Promise.all([
+        Promise.all(searchTerms.map(term => searchChannels(term).catch(() => []))),
+        allChannelsPromise,
+      ]);
+      const existingIds = new Set((existingChannels || []).map(ch => ch.channelId));
       const merged = new Map();
       resultsPerTerm.forEach(list => {
         (list || []).forEach(ch => {
@@ -854,21 +852,25 @@ export default function YouTubeAnalyzer() {
           if (!existing || ch.pplScore > existing.pplScore) merged.set(ch.channelId, ch);
         });
       });
+      const allCandidates = Array.from(merged.values());
+      const newCandidates = allCandidates.filter(ch => !existingIds.has(ch.channelId));
+      const excludedCount = allCandidates.length - newCandidates.length;
+
       const byTier = {};
       ENGAGEMENT_BENCHMARKS.forEach(b => { byTier[b.tier] = []; });
-      Array.from(merged.values()).forEach(ch => {
+      newCandidates.forEach(ch => {
         const fit = calculateDiscoveryFit(item, ch);
         if (!byTier[fit.tier]) byTier[fit.tier] = [];
         byTier[fit.tier].push({ channel: ch, fit });
       });
       Object.keys(byTier).forEach(t => byTier[t].sort((a, b) => b.fit.total - a.fit.total));
-      setProductDiscoveryResults(prev => ({ ...prev, [itemId]: { loading: false, error: null, tiers: byTier, searchedTerms: searchTerms } }));
+      setProductDiscoveryResults(prev => ({ ...prev, [itemId]: { loading: false, error: null, tiers: byTier, searchedTerms: searchTerms, excludedCount } }));
     } catch (err) {
-      setProductDiscoveryResults(prev => ({ ...prev, [itemId]: { loading: false, error: err.response?.data?.error || err.message, tiers: {}, searchedTerms: searchTerms } }));
+      setProductDiscoveryResults(prev => ({ ...prev, [itemId]: { loading: false, error: err.response?.data?.error || err.message, tiers: {}, searchedTerms: searchTerms, excludedCount: 0 } }));
     }
   };
 
-  // 추천 목록에서 아직 등록되지 않은 채널을 "+ 분석 추가" 하면 바로 정식 채널로 추가하고 요약 탭으로 이동한다.
+  // 추천 목록에서 신규 채널을 "+ 분석 추가" 하면 바로 정식 채널로 추가하고 요약 탭으로 이동한다.
   const handleAddDiscoveredChannel = async (channelId, channelName) => {
     setAddingDiscoveredChannelId(channelId);
     try {
@@ -886,22 +888,6 @@ export default function YouTubeAnalyzer() {
     } finally {
       setAddingDiscoveredChannelId(null);
     }
-  };
-
-  // 이미 추가돼있던 채널이면 바로 요약 탭으로 이동한다. 다른 팀원 소유 채널일 수도 있으므로
-  // 필요하면 "보는 중" 컨텍스트(viewingOwner)도 함께 전환해줘야 화면에 제대로 뜬다.
-  const handleJumpToChannel = (channel) => {
-    const ownerIdStr = channel.ownerId ? String(channel.ownerId) : null;
-    if (ownerIdStr && ownerIdStr !== currentUser?.id) {
-      setViewingOwner({ id: ownerIdStr, name: channel.ownerName || '팀원' });
-    } else {
-      setViewingOwner(null);
-    }
-    setSelectedChannelId(channel._id);
-    setShowItemManager(false);
-    setRecommendingItemId(null);
-    setActiveTab('summary');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // 캠페인 실적 기록 추가 — 예상치(예상 클릭수×전환율) 대비 실제 결과를 남겨두면
@@ -2158,9 +2144,7 @@ export default function YouTubeAnalyzer() {
                     {recommendingItemId === item._id && (
                       <ProductChannelRecommendations
                         result={productDiscoveryResults[item._id]}
-                        alreadyAddedMap={allChannelsForMatching ? new Map(allChannelsForMatching.map(ch => [ch.channelId, ch])) : new Map()}
                         onAddChannel={handleAddDiscoveredChannel}
-                        onJumpToChannel={handleJumpToChannel}
                         addingChannelId={addingDiscoveredChannelId}
                       />
                     )}
@@ -4003,7 +3987,7 @@ export default function YouTubeAnalyzer() {
                   <div className="bg-yellow-900/20 border border-yellow-700/40 rounded p-3 space-y-1.5">
                     <p className="text-yellow-300 text-xs">🔍 카테고리 + 매칭 키워드를 각각 검색어로 써서 유튜브 채널 검색 API를 호출합니다(최대 4개 검색어). 결과를 합쳐 중복을 제거한 뒤 점수순으로 정렬합니다. 카테고리/키워드를 입력하지 않으면 검색할 수 없다는 안내가 표시됩니다.</p>
                     <p className="text-yellow-300 text-xs">🔗 "상품 설명 URL"은 참고용 링크로만 저장되며, 자동으로 페이지 내용을 읽어와 분석하지 않습니다. 실제 검색어로 쓰이는 것은 직접 입력한 카테고리·매칭 키워드입니다.</p>
-                    <p className="text-yellow-300 text-xs">이미 팀에 등록된 채널이 검색 결과에 나오면 "✓ 이미 추가됨" 배지와 함께 "채널 보기" 버튼이, 아직 등록 안 된 채널이면 "+ 분석 추가" 버튼이 표시됩니다. 각 채널 카드에는 점수 산출 근거가 그대로 표시됩니다.</p>
+                    <p className="text-yellow-300 text-xs">검색된 채널 중 팀에 이미 등록된 채널은 추천 목록에서 자동으로 제외됩니다(같은 키워드로 처음 채널을 찾을 때 등록했던 채널이 계속 상위권에 나와 추천 슬롯을 차지하는 걸 막기 위함). 제외된 개수는 안내 문구에 함께 표시됩니다. 남은 신규 채널에는 "+ 분석 추가" 버튼이 표시되며, 각 카드에는 점수 산출 근거가 그대로 표시됩니다.</p>
                     <p className="text-yellow-300 text-xs">⚠️ 같은 품목을 다시 열면 유튜브 API 쿼터 절약을 위해 새로 검색하지 않고 이전 검색 결과를 그대로 보여줍니다. 키워드를 바꾼 뒤 최신 결과를 보려면 페이지를 새로고침하세요.</p>
                   </div>
                 </div>
