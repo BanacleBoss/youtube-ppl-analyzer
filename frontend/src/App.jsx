@@ -512,7 +512,7 @@ export default function YouTubeAnalyzer() {
   const [showDiscover, setShowDiscover] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [channelSearch, setChannelSearch] = useState('');
-  const [channelSortBy, setChannelSortBy] = useState('name'); // name | score | subscribers
+  const [channelSortBy, setChannelSortBy] = useState('name'); // name | score | subscribers | createdAt
   const [portfolioSortBy, setPortfolioSortBy] = useState('score'); // score | subscribers | avgViews | updated
   const [showSharePanel, setShowSharePanel] = useState(false);
   const [shareBusy, setShareBusy] = useState(null); // 'external' | 'internal' | null
@@ -2268,7 +2268,7 @@ export default function YouTubeAnalyzer() {
                   className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
                 />
                 <div className="flex gap-1.5">
-                  {[['name','이름순'],['score','효율점수'],['subscribers','구독자']].map(([val, label]) => (
+                  {[['name','이름순'],['score','효율점수'],['subscribers','구독자'],['createdAt','등록일']].map(([val, label]) => (
                     <button key={val} onClick={() => setChannelSortBy(val)} className={`flex-1 text-xs py-1.5 rounded transition font-medium ${channelSortBy === val ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400 hover:bg-slate-700'}`}>{label}</button>
                   ))}
                 </div>
@@ -2303,6 +2303,7 @@ export default function YouTubeAnalyzer() {
                   if (categoryFilter !== '전체') list = list.filter(ch => ch.audienceProfile?.category === categoryFilter);
                   if (channelSortBy === 'score') list.sort((a,b) => calculateEfficiencyScore(b).total - calculateEfficiencyScore(a).total);
                   else if (channelSortBy === 'subscribers') list.sort((a,b) => (b.subscribers||0) - (a.subscribers||0));
+                  else if (channelSortBy === 'createdAt') list.sort((a,b) => new Date(b.createdAt||0) - new Date(a.createdAt||0)); // 최근 등록 채널이 먼저 보이도록 최신순
                   else list.sort((a,b) => (a.channelName||'').localeCompare(b.channelName||'', 'ko'));
                   if (list.length === 0) return <p className="text-slate-500 text-sm text-center py-6">검색 결과가 없습니다</p>;
 
@@ -2349,7 +2350,8 @@ export default function YouTubeAnalyzer() {
                           ))}
                         </div>
                         <p className="text-xs text-slate-500 mb-1.5">롱폼 {filterVideos(channel.videos, 'longform').length} · 미드 {filterVideos(channel.videos, 'mid').length} · 숏폼 {filterVideos(channel.videos, 'shorts').length}</p>
-                        {channel.lastUpdated && <p className="text-xs text-slate-600 mb-2">{new Date(channel.lastUpdated).toLocaleDateString('ko-KR', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})} 갱신</p>}
+                        {channel.lastUpdated && <p className={`text-xs text-slate-600 ${channelSortBy === 'createdAt' ? '' : 'mb-2'}`}>{new Date(channel.lastUpdated).toLocaleDateString('ko-KR', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})} 갱신</p>}
+                        {channelSortBy === 'createdAt' && channel.createdAt && <p className="text-xs text-slate-600 mb-2">{new Date(channel.createdAt).toLocaleDateString('ko-KR', {year:'numeric',month:'numeric',day:'numeric'})} 등록</p>}
                         {!isViewingOther && (
                           <div className="flex gap-1.5">
                             <button onClick={(e) => { e.stopPropagation(); handleRefreshChannel(channel._id); }} disabled={refreshing[channel._id]} className="flex-1 bg-slate-700/80 hover:bg-blue-600 disabled:opacity-50 text-slate-300 hover:text-white text-xs py-1.5 rounded-lg transition flex items-center justify-center gap-1">
