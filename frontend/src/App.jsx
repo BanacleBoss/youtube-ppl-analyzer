@@ -536,8 +536,7 @@ export default function YouTubeAnalyzer() {
 
   // 품목-채널 추천 (🎯 채널 추천 기능)
   const [recommendingItemId, setRecommendingItemId] = useState(null);
-  const [allChannelsForMatching, setAllChannelsForMatching] = useState(null); // null=미로딩, [] 이상=로딩됨 — "이미 추가된 채널" 표시용 (팀 전체)
-  const [loadingAllChannels, setLoadingAllChannels] = useState(false);
+  const [allChannelsForMatching, setAllChannelsForMatching] = useState(null); // null=미로딩, [] 이상=로딩됨 — "이미 등록된 채널" 제외 판정용 (팀 전체)
   const [productDiscoveryResults, setProductDiscoveryResults] = useState({}); // itemId -> { loading, error, tiers, searchedTerms }
   const [addingDiscoveredChannelId, setAddingDiscoveredChannelId] = useState(null);
 
@@ -823,11 +822,9 @@ export default function YouTubeAnalyzer() {
     // "이미 등록된 채널" 제외 판정에 팀 전체 채널 목록이 필요하므로, 캐시가 없으면 지금 불러온다.
     let allChannelsPromise = Promise.resolve(allChannelsForMatching);
     if (allChannelsForMatching === null) {
-      setLoadingAllChannels(true);
       allChannelsPromise = getChannels('all')
         .then(data => { setAllChannelsForMatching(data); return data; })
-        .catch(() => { setAllChannelsForMatching([]); return []; })
-        .finally(() => setLoadingAllChannels(false));
+        .catch(() => { setAllChannelsForMatching([]); return []; });
     }
 
     if (productDiscoveryResults[itemId]) return; // 이미 검색해둔 결과가 있으면 재검색하지 않음
