@@ -395,6 +395,133 @@ export const calculateEfficiencyScore = (channel) => {
   };
 };
 
+// 🎯 상품-채널 매칭 점수 (0~100) — 카테고리 일치(30) + 키워드 일치(25) + 타깃 연령/성별 부합(20) + PPL 건강도(25)
+// 상품 또는 채널 쪽에 비교할 데이터가 없는 항목은 "감점"이 아니라 "중립 점수"로 처리한다
+// (기존 댓글 품질 보정 / 시청자 프로필 처리 방식과 동일한 원칙 — 데이터 부족이 곧 저품질을 의미하지 않기 때문).
+export const calculateProductChannelFit = (item, channel) => {
+  const reasons = [];
+  const eff = calculateEfficiencyScore(channel);
+  const d = eff.details;
+
+  // 1) 카테고리 일치 (30점)
+  const channelCategory = channel?.audienceProfile?.category || '';
+  let categoryScore;
+  if (item.category && channelCategory) {
+    categoryScore = item.category === channelCategory ? 30 : 5;
+    reasons.push(item.category === channelCategory ? `✅ 카테고리 일치 (${item.category})` : `⚠️ 카테고리 다름 (상품: ${item.category} / 채널: ${channelCategory})`);
+  } else {
+    categoryScore = 15;
+    reasons.push('카테고리 정보 부족 — 중립 처리');
+  }
+
+  // 2) 키워드 겹침 (25점) — 채널명 + 채널 키워드 텍스트에 상품 매칭 키워드가 포함되는지 확인
+  const keywords = (item.matchKeywords || []).map(k => k.toLowerCase().trim()).filter(Boolean);
+  let keywordScore;
+  if (keywords.length > 0) {
+    const channelText = `${channel.channelName || ''} ${(channel.channelKeywords || []).join(' ')}`.toLowerCase();
+    const matched = keywords.filter(k => channelText.includes(k));
+    keywordScore = Math.round((matched.length / keywords.length) * 25);
+    reasons.push(matched.length > 0 ? `✅ 키워드 ${matched.length}/${keywords.length}개 일치 (${matched.join(', ')})` : '일치하는 키워드 없음');
+  } else {
+    keywordScore = 12;
+    reasons.push('상품 키워드 미입력 — 중립 처리');
+  }
+
+  // 3) 타깃 연령/성별 부합 (20점) — 채널의 수동 입력 시청자 프로필(audienceProfile)과 비교
+  const ap = channel?.audienceProfile;
+  const AGE_KEYS = ['age1824', 'age2534', 'age3544', 'age4554', 'age5564'];
+  const hasTargetAge = (item.targetAges || []).length > 0;
+  const hasChannelAgeData = !!(ap && AGE_KEYS.some(k => ap[k] != null));
+  let ageRatio = 0.5;
+  if (hasTargetAge && hasChannelAgeData) {
+    const coverage = (item.targetAges || []).reduce((s, key) => s + (ap[key] || 0), 0);
+    ageRatio = Math.min(1, coverage / 100);
+    reasons.push(`타깃 연령대 시청자 비율 합계 ${coverage.toFixed(0)}%`);
+  } else if (hasTargetAge) {
+    reasons.push('채널 연령대 데이터 없음 — 중립 처리');
+  }
+  const hasTargetGender = !!item.targetGender && item.targetGender !== '무관';
+  const hasChannelGenderData = !!(ap && (ap.genderMale != null || ap.genderFemale != null));
+  let genderRatio = 0.5;
+  if (hasTargetGender && hasChannelGenderData) {
+    const pct = item.targetGender === '남성' ? (ap.genderMale ?? 0) : (ap.genderFemale ?? 0);
+    genderRatio = Math.min(1, pct / 100);
+    reasons.push(`타깃 성별(${item.targetGender}) 시청자 비율 ${pct}%`);
+  } else if (hasTargetGender) {
+    reasons.push('채널 성별 데이터 없음 — 중립 처리');
+  }
+  const demoScore = Math.round((ageRatio * 0.6 + genderRatio * 0.4) * 20);
+
+  // 4) PPL 건강도 (25점) — 채널 자체 효율점수와 광고비율 점수를 활용 (항상 계산 가능한 값)
+  const pplHealthScore = Math.round((eff.total / 100) * 15) + (d.adScore || 0);
+  reasons.push(`채널 효율점수 ${eff.total}/100, 광고비율 ${d.adRatio}%(${d.adScore}/10점)`);
+
+  const total = Math.max(0, Math.min(100, categoryScore + keywordScore + demoScore + pplHealthScore));
+  return {
+    total,
+    breakdown: { categoryScore, keywordScore, demoScore, pplHealthScore },
+    reasons,
+    tier: getEngagementBenchmark(channel.subscribers).tier,
+  };
+};
+
+// 품목 등록 폼에서 "🎯 이 품목에 맞는 채널 추천"을 눌렀을 때 표시되는 구간별(나노~메가) 상위 5개 추천 목록.
+// allChannels가 null이면 아직 안 불러온 상태(버튼 처음 클릭 전), []이면 로딩 완료 후 채널이 없는 상태.
+const ProductChannelRecommendations = ({ item, allChannels, loading, onSelectChannel }) => {
+  if (loading) {
+    return (
+      <div className="mt-3 flex items-center gap-2 text-slate-400 text-sm">
+        <Loader size={14} className="animate-spin" /> 전체 채널 불러오는 중...
+      </div>
+    );
+  }
+  if (!allChannels) return null;
+  if (allChannels.length === 0) {
+    return <p className="mt-3 text-slate-500 text-sm">등록된 채널이 없습니다.</p>;
+  }
+  const hasAnyMatchInfo = item.category || (item.matchKeywords || []).length > 0 || (item.targetAges || []).length > 0 || item.targetGender;
+  const ranked = allChannels.map(ch => ({ channel: ch, fit: calculateProductChannelFit(item, ch) }));
+  const byTier = {};
+  ENGAGEMENT_BENCHMARKS.forEach(b => { byTier[b.tier] = []; });
+  ranked.forEach(r => {
+    const t = r.fit.tier;
+    if (!byTier[t]) byTier[t] = [];
+    byTier[t].push(r);
+  });
+  Object.keys(byTier).forEach(t => byTier[t].sort((a, b) => b.fit.total - a.fit.total));
+
+  return (
+    <div className="mt-3 bg-slate-800/80 border border-emerald-700/40 rounded-lg p-3 space-y-3">
+      <p className="text-slate-400 text-[11px]">
+        근거: 카테고리 일치(30점) + 매칭 키워드(25점) + 타깃 연령·성별 부합(20점) + 채널 효율점수·광고비율(25점) 합산 · 각 구간(나노~메가)별 상위 5개
+      </p>
+      {!hasAnyMatchInfo && (
+        <p className="text-yellow-400 text-xs">⚠️ 이 품목에 카테고리/키워드/타깃 정보가 입력되지 않아 대부분 중립 점수로 계산됩니다. 위 "채널 추천용 정보"를 입력하면 더 정확해집니다.</p>
+      )}
+      {ENGAGEMENT_BENCHMARKS.map(b => {
+        const list = (byTier[b.tier] || []).slice(0, 5);
+        if (list.length === 0) return null;
+        return (
+          <div key={b.tier}>
+            <p className="text-slate-300 text-xs font-semibold mb-1.5">{b.tier}</p>
+            <div className="space-y-1.5">
+              {list.map(({ channel: ch, fit }) => (
+                <button key={ch._id} onClick={() => onSelectChannel(ch)} className="w-full text-left bg-slate-700/60 hover:bg-slate-700 rounded p-2 transition">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-white text-xs font-medium truncate">{ch.channelName}</span>
+                    <span className={`text-xs font-bold flex-shrink-0 ${fit.total >= 70 ? 'text-green-400' : fit.total >= 40 ? 'text-yellow-400' : 'text-red-400'}`}>{fit.total}점</span>
+                  </div>
+                  <p className="text-slate-500 text-[10px] mt-0.5">구독자 {formatKoreanCount(ch.subscribers)}명 · {fit.reasons.join(' · ')}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 export default function YouTubeAnalyzer() {
   const [channels, setChannels] = useState([]);
   const [channelInput, setChannelInput] = useState('');
@@ -435,8 +562,14 @@ export default function YouTubeAnalyzer() {
   // 품목 관리
   const [items, setItems] = useState([]);
   const [showItemManager, setShowItemManager] = useState(false);
-  const [itemForm, setItemForm] = useState({ name: '', sellPrice: '', cost: '', shippingCost: '', giftCost: '', memo: '' });
+  const [itemForm, setItemForm] = useState({ name: '', sellPrice: '', cost: '', shippingCost: '', giftCost: '', memo: '', category: '', matchKeywords: [], targetAges: [], targetGender: '', descriptionUrl: '' });
+  const [itemKeywordInput, setItemKeywordInput] = useState('');
   const [editingItemId, setEditingItemId] = useState(null);
+
+  // 품목-채널 추천 (🎯 채널 추천 기능)
+  const [recommendingItemId, setRecommendingItemId] = useState(null);
+  const [allChannelsForMatching, setAllChannelsForMatching] = useState(null); // null=미로딩, [] 이상=로딩됨
+  const [loadingAllChannels, setLoadingAllChannels] = useState(false);
 
   // 캠페인 실적 기록
   const [campaignLogForm, setCampaignLogForm] = useState({ date: '', actualQty: '', actualRevenue: '', totalMG: '', videoId: '', note: '' });
@@ -642,7 +775,8 @@ export default function YouTubeAnalyzer() {
   };
 
   const resetItemForm = () => {
-    setItemForm({ name: '', sellPrice: '', cost: '', shippingCost: '', giftCost: '', memo: '' });
+    setItemForm({ name: '', sellPrice: '', cost: '', shippingCost: '', giftCost: '', memo: '', category: '', matchKeywords: [], targetAges: [], targetGender: '', descriptionUrl: '' });
+    setItemKeywordInput('');
     setEditingItemId(null);
   };
 
@@ -655,7 +789,12 @@ export default function YouTubeAnalyzer() {
         cost: Math.max(0, parseInt(itemForm.cost) || 0),
         shippingCost: Math.max(0, parseInt(itemForm.shippingCost) || 0),
         giftCost: Math.max(0, parseInt(itemForm.giftCost) || 0),
-        memo: itemForm.memo || ''
+        memo: itemForm.memo || '',
+        category: itemForm.category || '',
+        matchKeywords: itemForm.matchKeywords || [],
+        targetAges: itemForm.targetAges || [],
+        targetGender: itemForm.targetGender || '',
+        descriptionUrl: itemForm.descriptionUrl || ''
       };
       if (editingItemId) {
         const updated = await updateItem(editingItemId, payload);
@@ -680,8 +819,14 @@ export default function YouTubeAnalyzer() {
       cost: item.cost ?? '',
       shippingCost: item.shippingCost ?? '',
       giftCost: item.giftCost ?? '',
-      memo: item.memo ?? ''
+      memo: item.memo ?? '',
+      category: item.category ?? '',
+      matchKeywords: item.matchKeywords ?? [],
+      targetAges: item.targetAges ?? [],
+      targetGender: item.targetGender ?? '',
+      descriptionUrl: item.descriptionUrl ?? ''
     });
+    setItemKeywordInput('');
   };
 
   const handleDeleteItem = async (itemId) => {
@@ -693,6 +838,41 @@ export default function YouTubeAnalyzer() {
     } catch (err) {
       setError('품목 삭제 실패: ' + err.message);
     }
+  };
+
+  // 🎯 채널 추천 — 이 품목과 맞는 채널을 찾으려면 "내 채널"뿐 아니라 팀 전체 채널을 봐야 하므로
+  // 별도로 전체 채널을 한 번만 불러와 캐시해둔다 (열 때마다 다시 불러오지 않음).
+  const handleOpenRecommend = async (itemId) => {
+    if (recommendingItemId === itemId) { setRecommendingItemId(null); return; }
+    setRecommendingItemId(itemId);
+    if (allChannelsForMatching === null) {
+      setLoadingAllChannels(true);
+      try {
+        const data = await getChannels('all');
+        setAllChannelsForMatching(data);
+      } catch (err) {
+        setError('전체 채널 목록을 불러오지 못했습니다: ' + (err.response?.data?.error || err.message));
+        setAllChannelsForMatching([]);
+      } finally {
+        setLoadingAllChannels(false);
+      }
+    }
+  };
+
+  // 추천 결과에서 채널을 클릭하면 요약 탭으로 이동한다. 다른 팀원 소유 채널일 수도 있으므로
+  // 필요하면 "보는 중" 컨텍스트(viewingOwner)도 함께 전환해줘야 화면에 제대로 뜬다.
+  const handleJumpToChannel = (channel) => {
+    const ownerIdStr = channel.ownerId ? String(channel.ownerId) : null;
+    if (ownerIdStr && ownerIdStr !== currentUser?.id) {
+      setViewingOwner({ id: ownerIdStr, name: channel.ownerName || '팀원' });
+    } else {
+      setViewingOwner(null);
+    }
+    setSelectedChannelId(channel._id);
+    setShowItemManager(false);
+    setRecommendingItemId(null);
+    setActiveTab('summary');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // 캠페인 실적 기록 추가 — 예상치(예상 클릭수×전환율) 대비 실제 결과를 남겨두면
@@ -1837,7 +2017,76 @@ export default function YouTubeAnalyzer() {
                   <input type="text" value={itemForm.memo} onChange={e => setItemForm({ ...itemForm, memo: e.target.value })} placeholder="선택사항" className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
                 </div>
               </div>
-              <div className="flex gap-2">
+
+              {/* 채널 추천용 매칭 정보 — 입력해두면 아래 "🎯 채널 추천"에서 이 값들로 채널을 찾아준다 */}
+              <div className="border-t border-slate-600 pt-3 mt-1">
+                <div className="flex items-center gap-2 mb-2">
+                  <p className="text-slate-300 text-xs font-semibold">🎯 채널 추천용 정보</p>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-500 border border-slate-600">선택 입력</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                  <div>
+                    <label className="block text-slate-400 text-xs mb-1">카테고리</label>
+                    <input list="item-category-presets" type="text" value={itemForm.category} onChange={e => setItemForm({ ...itemForm, category: e.target.value })}
+                      placeholder="채널 카테고리와 동일한 값 (예: 건강)"
+                      className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                    <datalist id="item-category-presets">
+                      {CATEGORY_PRESETS.map(c => <option key={c} value={c} />)}
+                    </datalist>
+                  </div>
+                  <div>
+                    <label className="block text-slate-400 text-xs mb-1">타깃 성별</label>
+                    <select value={itemForm.targetGender} onChange={e => setItemForm({ ...itemForm, targetGender: e.target.value })}
+                      className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500">
+                      <option value="">무관/미지정</option>
+                      <option value="남성">남성 타깃</option>
+                      <option value="여성">여성 타깃</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="mb-3">
+                  <label className="block text-slate-400 text-xs mb-1">키워드 태그 (채널명·채널 키워드와 비교)</label>
+                  <div className="flex gap-2 mb-1.5 flex-wrap">
+                    {itemForm.matchKeywords.map(k => (
+                      <span key={k} className="flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/40">
+                        #{k}
+                        <button onClick={() => setItemForm(f => ({ ...f, matchKeywords: f.matchKeywords.filter(t => t !== k) }))} className="text-purple-400 hover:text-white ml-0.5">×</button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <input type="text" value={itemKeywordInput} onChange={e => setItemKeywordInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && itemKeywordInput.trim()) { setItemForm(f => ({ ...f, matchKeywords: [...new Set([...f.matchKeywords, itemKeywordInput.trim()])] })); setItemKeywordInput(''); } }}
+                      placeholder="예: 마사지, 안마, 통증완화, 홈케어 — Enter로 추가"
+                      className="flex-1 bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500" />
+                    <button onClick={() => { if (itemKeywordInput.trim()) { setItemForm(f => ({ ...f, matchKeywords: [...new Set([...f.matchKeywords, itemKeywordInput.trim()])] })); setItemKeywordInput(''); } }}
+                      className="bg-emerald-700 hover:bg-emerald-600 text-white px-3 py-2 rounded text-sm transition">추가</button>
+                  </div>
+                </div>
+                <div className="mb-3">
+                  <label className="block text-slate-400 text-xs mb-1">타깃 연령대 (채널 시청자 프로필과 비교, 복수 선택 가능)</label>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {[['age1824', '18-24'], ['age2534', '25-34'], ['age3544', '35-44'], ['age4554', '45-54'], ['age5564', '55-64']].map(([key, label]) => {
+                      const active = itemForm.targetAges.includes(key);
+                      return (
+                        <button key={key} type="button"
+                          onClick={() => setItemForm(f => ({ ...f, targetAges: active ? f.targetAges.filter(k => k !== key) : [...f.targetAges, key] }))}
+                          className={`text-xs px-2.5 py-1 rounded-full border transition ${active ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-800 border-slate-600 text-slate-400 hover:border-emerald-500'}`}>
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-slate-400 text-xs mb-1">상품 설명 URL (참고용 링크 — 자동 분석하지 않음)</label>
+                  <input type="url" value={itemForm.descriptionUrl} onChange={e => setItemForm({ ...itemForm, descriptionUrl: e.target.value })}
+                    placeholder="https://..."
+                    className="w-full bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-emerald-500" />
+                </div>
+              </div>
+
+              <div className="flex gap-2 mt-3">
                 <button onClick={handleSaveItem} className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded text-sm font-semibold transition">
                   {editingItemId ? '수정 저장' : '+ 품목 등록'}
                 </button>
@@ -1848,28 +2097,40 @@ export default function YouTubeAnalyzer() {
             </div>
 
             {items.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="border-b border-slate-600"><tr className="text-slate-300"><th className="text-left p-2">품목명</th><th className="text-right p-2">판매가</th><th className="text-right p-2">원가</th><th className="text-right p-2">배송비</th><th className="text-right p-2">사은품</th><th className="text-left p-2">메모</th><th className="text-center p-2">관리</th></tr></thead>
-                  <tbody>
-                    {items.map(item => (
-                      <tr key={item._id} className="border-b border-slate-700 hover:bg-slate-700 transition">
-                        <td className="p-2 text-white font-semibold">{item.name}</td>
-                        <td className="text-right p-2 text-slate-200">{(item.sellPrice || 0).toLocaleString()}원</td>
-                        <td className="text-right p-2 text-slate-400">{(item.cost || 0).toLocaleString()}원</td>
-                        <td className="text-right p-2 text-slate-400">{(item.shippingCost || 0).toLocaleString()}원</td>
-                        <td className="text-right p-2 text-slate-400">{(item.giftCost || 0).toLocaleString()}원</td>
-                        <td className="p-2 text-slate-500 truncate max-w-xs">{item.memo}</td>
-                        <td className="text-center p-2">
-                          <div className="flex gap-1 justify-center">
-                            <button onClick={() => handleEditItem(item)} className="text-blue-400 hover:text-blue-300 p-1"><Pencil size={14} /></button>
-                            <button onClick={() => handleDeleteItem(item._id)} className="text-red-400 hover:text-red-300 p-1"><Trash2 size={14} /></button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="space-y-3">
+                {items.map(item => (
+                  <div key={item._id} className="bg-slate-700/60 border border-slate-600 rounded-lg p-4">
+                    <div className="flex items-start justify-between gap-3 mb-2">
+                      <div className="min-w-0">
+                        <p className="text-white font-semibold">{item.name}</p>
+                        <p className="text-slate-400 text-xs mt-0.5">
+                          판매가 {(item.sellPrice || 0).toLocaleString()}원 · 원가 {(item.cost || 0).toLocaleString()}원 · 배송비 {(item.shippingCost || 0).toLocaleString()}원 · 사은품 {(item.giftCost || 0).toLocaleString()}원
+                        </p>
+                        {item.memo && <p className="text-slate-500 text-xs mt-1">📝 {item.memo}</p>}
+                      </div>
+                      <div className="flex gap-1 flex-shrink-0">
+                        <button onClick={() => handleEditItem(item)} className="text-blue-400 hover:text-blue-300 p-1"><Pencil size={14} /></button>
+                        <button onClick={() => handleDeleteItem(item._id)} className="text-red-400 hover:text-red-300 p-1"><Trash2 size={14} /></button>
+                      </div>
+                    </div>
+                    {(item.category || (item.matchKeywords || []).length > 0 || item.targetGender || (item.targetAges || []).length > 0 || item.descriptionUrl) && (
+                      <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                        {item.category && <span className="text-xs px-1.5 py-0.5 rounded-full bg-teal-500/20 text-teal-400 border border-teal-500/40">{item.category}</span>}
+                        {(item.matchKeywords || []).map(k => <span key={k} className="text-xs px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/40">#{k}</span>)}
+                        {item.targetGender && <span className="text-xs px-1.5 py-0.5 rounded-full bg-pink-500/20 text-pink-400 border border-pink-500/40">타깃 {item.targetGender}</span>}
+                        {(item.targetAges || []).length > 0 && <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/40">{item.targetAges.map(k => k.replace('age', '').replace(/(\d{2})(\d{2})/, '$1-$2')).join(', ')}세</span>}
+                        {item.descriptionUrl && <a href={item.descriptionUrl} target="_blank" rel="noreferrer" className="text-xs text-blue-400 hover:underline">🔗 설명 페이지</a>}
+                      </div>
+                    )}
+                    <button onClick={() => handleOpenRecommend(item._id)} className={`text-xs px-3 py-1.5 rounded transition font-medium ${recommendingItemId === item._id ? 'bg-emerald-600 text-white' : 'bg-emerald-700/50 hover:bg-emerald-600/70 text-white'}`}>
+                      🎯 {recommendingItemId === item._id ? '채널 추천 닫기' : '이 품목에 맞는 채널 추천'}
+                    </button>
+
+                    {recommendingItemId === item._id && (
+                      <ProductChannelRecommendations item={item} allChannels={allChannelsForMatching} loading={loadingAllChannels} onSelectChannel={handleJumpToChannel} />
+                    )}
+                  </div>
+                ))}
               </div>
             ) : (
               <p className="text-slate-400 text-center py-6 text-sm">등록된 품목이 없습니다. 위에서 첫 품목을 등록하세요.</p>
@@ -3684,6 +3945,32 @@ export default function YouTubeAnalyzer() {
                         <p className="text-slate-400 text-xs">{item.example}</p>
                       </div>
                     ))}
+                  </div>
+                </div>
+              </section>
+
+              {/* 상품-채널 추천 매칭 */}
+              <section>
+                <h3 className="text-emerald-400 font-bold text-base mb-3">🎯 품목별 채널 추천, 어떻게 계산하나요?</h3>
+                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 space-y-3">
+                  <p className="text-slate-300">품목관리에서 상품에 <span className="text-white font-semibold">카테고리 · 매칭 키워드 · 타깃 연령/성별</span>을 입력해두면, "🎯 이 품목에 맞는 채널 추천" 버튼으로 전체 팀 채널 중 이 상품과 궁합이 좋은 채널을 구독자 구간(나노~메가)별 상위 5개씩 뽑아 보여줍니다.</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {[
+                      { label:'카테고리 일치 (30점)', desc:'상품 카테고리와 채널의 시청자 프로필 카테고리가 같으면 만점, 다르면 낮은 점수.' },
+                      { label:'매칭 키워드 (25점)', desc:'입력한 키워드가 채널명·채널 키워드에 포함된 비율만큼 점수 부여.' },
+                      { label:'타깃 연령·성별 (20점)', desc:'채널의 시청자 프로필(수동 입력) 중 타깃 연령대·성별 비율이 높을수록 고득점.' },
+                      { label:'PPL 건강도 (25점)', desc:'그 채널의 효율 점수(위 참고)와 광고 비율 점수를 반영 — 항상 계산 가능한 값.' },
+                    ].map(item => (
+                      <div key={item.label} className="bg-slate-700/60 rounded p-2">
+                        <p className="text-white text-xs font-semibold">{item.label}</p>
+                        <p className="text-slate-400 text-xs">{item.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="bg-yellow-900/20 border border-yellow-700/40 rounded p-3 space-y-1.5">
+                    <p className="text-yellow-300 text-xs">⚠️ 상품 또는 채널 쪽에 비교할 정보가 없으면(카테고리 미입력, 시청자 프로필 미입력 등) 감점이 아니라 중립 점수로 처리됩니다. 정보를 많이 입력할수록 추천 정확도가 올라갑니다.</p>
+                    <p className="text-yellow-300 text-xs">🔗 "상품 설명 URL"은 참고용 링크로만 저장되며, 자동으로 페이지 내용을 읽어와 분석하지 않습니다. 실제 매칭에 쓰이는 것은 직접 입력한 카테고리·키워드·타깃 정보입니다.</p>
+                    <p className="text-yellow-300 text-xs">각 추천 채널 카드에는 점수 산출 근거(어느 항목에서 몇 점을 받았는지)가 그대로 표시되며, 클릭하면 해당 채널의 요약 화면으로 바로 이동합니다.</p>
                   </div>
                 </div>
               </section>

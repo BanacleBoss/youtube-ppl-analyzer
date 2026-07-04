@@ -249,6 +249,16 @@ const itemSchema = new mongoose.Schema({
   shippingCost: { type: Number, default: 0 },  // 배송비
   giftCost: { type: Number, default: 0 },      // 사은품 비용 (기본값)
   memo: { type: String, default: '' },
+
+  // 이 품목에 맞는 유튜버를 추천하는 기능(calculateProductChannelFit, 프론트)에 쓰이는 필드.
+  // 설명 URL은 자동 분석하지 않고 참고 링크로만 저장한다 — 쇼핑몰 페이지 크롤링은 사이트마다
+  // 구조가 다르고 차단도 많아 안정적이지 않으므로, 매칭에 실제로 쓰는 값은 아래처럼 직접 입력받는다.
+  category: { type: String, default: '' },          // 채널의 audienceProfile.category와 동일한 값으로 비교
+  matchKeywords: [{ type: String }],                  // 채널명/채널 키워드와 겹치는지 비교할 태그
+  targetAges: [{ type: String }],                     // 타깃 연령대 ('age1824'~'age5564' 중 선택, channel.audienceProfile과 동일 키)
+  targetGender: { type: String, enum: ['남성', '여성', '무관', ''], default: '' },
+  descriptionUrl: { type: String, default: '' },      // 상품 설명 페이지 참고 링크 (자동 분석 안 함)
+
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
@@ -846,14 +856,14 @@ app.get('/api/health', (req, res) => {
 });
 
 // GET: 채널 조회
-// 쿼리 없이 호출하면 "내 채널"만, ?ownerId=<사용자ID>로 특정 팀원의 채널을, ?ownerId=all(관리자 전용)로
-// 전체 채널을 조회한다. 팀원 목록에서 다른 사람 이름을 클릭했을 때 그 사람 채널로 전환하는 데 쓰인다.
+// 쿼리 없이 호출하면 "내 채널"만, ?ownerId=<사용자ID>로 특정 팀원의 채널을, ?ownerId=all로 전체 채널을
+// 조회한다. 채널 조회 자체는 팀 전체에 열려있는 정책(수정/삭제만 담당자 제한)이라 all도 관리자로
+// 제한하지 않는다 — 품목-채널 매칭 추천처럼 전체 채널을 대상으로 계산해야 하는 기능에 필요하다.
 app.get('/api/channels', requireAuth, async (req, res) => {
   try {
     const { ownerId } = req.query;
     let filter;
     if (ownerId === 'all') {
-      if (req.user.role !== 'admin') return res.status(403).json({ error: '전체 채널 조회는 관리자만 가능합니다' });
       filter = {};
     } else if (ownerId) {
       if (!mongoose.Types.ObjectId.isValid(ownerId)) return res.status(400).json({ error: '잘못된 ownerId 형식입니다' });
@@ -1274,10 +1284,18 @@ app.get('/api/public/summary/:token', async (req, res) => {
 
 // ===== 품목(제품) 관리 API =====
 
+// 품목-채널 매칭 필드 검증용 상수/헬퍼
+const VALID_TARGET_AGE_KEYS = ['age1824', 'age2534', 'age3544', 'age4554', 'age5564'];
+const VALID_TARGET_GENDERS = ['남성', '여성', '무관', ''];
+function sanitizeStringArray(arr) {
+  if (!Array.isArray(arr)) return [];
+  return [...new Set(arr.map(s => String(s).trim()).filter(Boolean))];
+}
+
 // POST: 품목 추가
 app.post('/api/items', requireAuth, async (req, res) => {
   try {
-    const { name, sellPrice, cost, shippingCost, giftCost, memo } = req.body;
+    const { name, sellPrice, cost, shippingCost, giftCost, memo, category, matchKeywords, targetAges, targetGender, descriptionUrl } = req.body;
     if (!name || !String(name).trim()) return res.status(400).json({ error: '품목명을 입력하세요' });
 
     const item = new Item({
@@ -1286,7 +1304,12 @@ app.post('/api/items', requireAuth, async (req, res) => {
       cost: toNonNegativeNumber(cost),
       shippingCost: toNonNegativeNumber(shippingCost),
       giftCost: toNonNegativeNumber(giftCost),
-      memo: memo || ''
+      memo: memo || '',
+      category: (category || '').trim(),
+      matchKeywords: sanitizeStringArray(matchKeywords),
+      targetAges: sanitizeStringArray(targetAges).filter(k => VALID_TARGET_AGE_KEYS.includes(k)),
+      targetGender: VALID_TARGET_GENDERS.includes(targetGender) ? targetGender : '',
+      descriptionUrl: (descriptionUrl || '').trim()
     });
     await item.save();
     res.json(item);
@@ -1308,7 +1331,7 @@ app.get('/api/items', requireAuth, async (req, res) => {
 // PUT: 품목 수정
 app.put('/api/items/:id', requireAuth, async (req, res) => {
   try {
-    const { name, sellPrice, cost, shippingCost, giftCost, memo } = req.body;
+    const { name, sellPrice, cost, shippingCost, giftCost, memo, category, matchKeywords, targetAges, targetGender, descriptionUrl } = req.body;
     const item = await Item.findById(req.params.id);
     if (!item) return res.status(404).json({ error: '품목을 찾을 수 없습니다' });
 
@@ -1318,6 +1341,11 @@ app.put('/api/items/:id', requireAuth, async (req, res) => {
     if (shippingCost !== undefined) item.shippingCost = toNonNegativeNumber(shippingCost, item.shippingCost);
     if (giftCost !== undefined) item.giftCost = toNonNegativeNumber(giftCost, item.giftCost);
     if (memo !== undefined) item.memo = memo;
+    if (category !== undefined) item.category = (category || '').trim();
+    if (matchKeywords !== undefined) item.matchKeywords = sanitizeStringArray(matchKeywords);
+    if (targetAges !== undefined) item.targetAges = sanitizeStringArray(targetAges).filter(k => VALID_TARGET_AGE_KEYS.includes(k));
+    if (targetGender !== undefined) item.targetGender = VALID_TARGET_GENDERS.includes(targetGender) ? targetGender : '';
+    if (descriptionUrl !== undefined) item.descriptionUrl = (descriptionUrl || '').trim();
     item.updatedAt = new Date();
 
     await item.save();
