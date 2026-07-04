@@ -433,7 +433,7 @@ export const calculateDiscoveryFit = (item, ch) => {
 
 // 품목 등록 폼에서 "🎯 이 품목에 맞는 채널 추천"을 눌렀을 때 표시되는, YouTube에서 새로 찾은
 // 구간별(나노~메가) 상위 5개 후보 목록. result가 없으면(버튼 처음 클릭 전) 아무것도 렌더링하지 않는다.
-const ProductChannelRecommendations = ({ item, result, alreadyAddedMap, onAddChannel, onJumpToChannel, addingChannelId }) => {
+const ProductChannelRecommendations = ({ result, alreadyAddedMap, onAddChannel, onJumpToChannel, addingChannelId }) => {
   if (!result) return null;
   if (result.loading) {
     return (
@@ -2157,7 +2157,6 @@ export default function YouTubeAnalyzer() {
 
                     {recommendingItemId === item._id && (
                       <ProductChannelRecommendations
-                        item={item}
                         result={productDiscoveryResults[item._id]}
                         alreadyAddedMap={allChannelsForMatching ? new Map(allChannelsForMatching.map(ch => [ch.channelId, ch])) : new Map()}
                         onAddChannel={handleAddDiscoveredChannel}
