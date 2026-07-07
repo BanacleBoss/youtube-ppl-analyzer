@@ -108,7 +108,7 @@ const channelSchema = new mongoose.Schema({
   pplSettings: {
     productPrice: { type: Number, default: 50000 },
     expectedClicks: { type: Number, default: 0 },       // 예상 클릭수 (영상→구매페이지 유입 예상치)
-    expectedConversionRate: { type: Number, default: 0.03 },
+    expectedConversionRate: { type: Number, default: 0.015 },
 
     // 품목/손익 관련 (BEP 계산용)
     itemId: { type: mongoose.Schema.Types.ObjectId, ref: 'Item', default: null },
@@ -815,7 +815,7 @@ app.post('/api/channels', requireAuth, async (req, res) => {
     const pplData = calculatePPLSummary(videos, {
       productPrice: 50000,
       expectedClicks: 0,
-      expectedConversionRate: 0.03,
+      expectedConversionRate: 0.015,
       cost: 0, shippingCost: 0, giftCost: 0, pgFeeRate: 0.0385,
       totalMG: 0, agencyMGShareRate: 0.3, rsRate: 0.2
     });
@@ -835,7 +835,7 @@ app.post('/api/channels', requireAuth, async (req, res) => {
       pplSettings: {
         productPrice: 50000,
         expectedClicks: 0,
-        expectedConversionRate: 0.03
+        expectedConversionRate: 0.015
       },
       videos,
       dailyStats: [{
@@ -980,7 +980,7 @@ app.post('/api/channels/:id/settings', requireAuth, requireChannelOwner, async (
     const nextSettings = {
       productPrice: toNonNegativeNumber(req.body.productPrice, 50000),
       expectedClicks: toNonNegativeNumber(req.body.expectedClicks, 0),
-      expectedConversionRate: toNonNegativeNumber(req.body.expectedConversionRate, 0.03),
+      expectedConversionRate: toNonNegativeNumber(req.body.expectedConversionRate, 0.015),
 
       itemId: req.body.itemId || null,
       itemName: req.body.itemName || '',

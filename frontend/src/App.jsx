@@ -274,6 +274,21 @@ export const getEngagementBenchmark = (subscribers) => {
   return ENGAGEMENT_BENCHMARKS[0];
 };
 
+// 조회수 대비 "설명란/고정댓글 외부 링크" 클릭률(CTR) 추정치 — "예상 클릭수"의 참고값 계산에 쓴다.
+// 예전에는 인게이지먼트율(좋아요+댓글 비율)을 그대로 클릭률처럼 썼는데, 좋아요/댓글은 유튜브 안에서
+// 끝나는 저마찰 행동인 반면 외부 링크 클릭은 설명란을 펼치거나 고정댓글을 찾아 눌러야 하는 고마찰
+// 행동이라 전혀 다른 지표다. 그래서 그 방식은 예상 클릭수를 몇 배씩 과대추정했다.
+// 출처: 슈퍼차트(국내 인플루언서 마케팅 플랫폼) 브런치 포스트(2022.10) — 자사 유튜브 PPL 캠페인 데이터
+// 기준 "조회수 대비 링크 클릭률 0.5~2%". 국내 유튜브 PPL 실측 근거이나 표본 규모·방법론이 공개된
+// 정식 리포트는 아니므로 참고용 근사치로 취급하고, 캠페인 실적이 쌓이면 실측값으로 대체하는 것을 권장.
+export const LINK_CTR_ASSUMPTION = {
+  low: 0.005,      // 0.5%
+  typical: 0.01,   // 1%
+  midHigh: 0.015,  // 1.5%
+  high: 0.02,      // 2%
+  source: '슈퍼차트 브런치(2022.10) 캠페인 데이터 — 조회수 대비 링크 클릭률 0.5~2%'
+};
+
 // 바이럴 영상 1개, 유독 저조한 영상 1개처럼 극단값 때문에 평균이 왜곡되는 것을 막기 위한 절사평균.
 // 표본이 5개 이상일 때만 최댓값·최솟값을 하나씩 제외하고, 그보다 적으면 왜곡 위험보다 표본 손실이
 // 더 크므로 그냥 평균을 쓴다.
@@ -501,7 +516,7 @@ export default function YouTubeAnalyzer() {
   const [refreshing, setRefreshing] = useState({});
   const [activeTab, setActiveTab] = useState('summary');
   const [settings, setSettings] = useState({
-    productPrice: 50000, expectedClicks: 0, expectedConversionRate: 0.03,
+    productPrice: 50000, expectedClicks: 0, expectedConversionRate: 0.015,
     itemId: '', itemName: '', cost: 0, shippingCost: 0, giftCost: 0, pgFeeRate: 0.0385,
     totalMG: 0, agencyMGShareRate: 0.3, rsRate: 0.2
   });
@@ -556,7 +571,7 @@ export default function YouTubeAnalyzer() {
   const [sim, setSim] = React.useState({
     productPrice: 89000, cost: 30000, shippingCost: 3500, giftCost: 0,
     pgFeeRate: 0.0385, totalMG: 3000000, agencyMGShareRate: 0.3,
-    rsRate: 0.2, expectedClicks: 500, conversionRate: 0.03,
+    rsRate: 0.2, expectedClicks: 500, conversionRate: 0.015,
   });
 
   const [statusFilter, setStatusFilter] = useState('전체');
@@ -677,7 +692,7 @@ export default function YouTubeAnalyzer() {
       setSettings({
         productPrice: ch.pplSettings.productPrice ?? 50000,
         expectedClicks: ch.pplSettings.expectedClicks ?? 0,
-        expectedConversionRate: ch.pplSettings.expectedConversionRate ?? 0.03,
+        expectedConversionRate: ch.pplSettings.expectedConversionRate ?? 0.015,
         itemId: ch.pplSettings.itemId ?? '',
         itemName: ch.pplSettings.itemName ?? '',
         cost: ch.pplSettings.cost ?? 0,
@@ -692,7 +707,7 @@ export default function YouTubeAnalyzer() {
       // pplSettings가 없는(비정상/legacy) 채널로 전환한 경우 이전 채널의 설정값이 그대로 남아있으면
       // 엉뚱한 채널 기준으로 BEP/추천 조건이 계산되는 크로스채널 오염이 발생한다 — 반드시 기본값으로 초기화한다.
       setSettings({
-        productPrice: 50000, expectedClicks: 0, expectedConversionRate: 0.03,
+        productPrice: 50000, expectedClicks: 0, expectedConversionRate: 0.015,
         itemId: '', itemName: '', cost: 0, shippingCost: 0, giftCost: 0,
         pgFeeRate: 0.0385, totalMG: 0, agencyMGShareRate: 0.3, rsRate: 0.2,
       });
@@ -1660,7 +1675,7 @@ export default function YouTubeAnalyzer() {
     let centerMG, basisText, marginWarning = '';
     if (hasRealItem) {
       const assumedClicks = settings.expectedClicks > 0 ? settings.expectedClicks : avgViewsForBudget * 0.005;
-      const assumedConv = settings.expectedConversionRate || 0.03;
+      const assumedConv = settings.expectedConversionRate || 0.015;
       const conservativeQty = assumedClicks * assumedConv;
       const recoverableMargin = Math.max(0, conservativeQty * dealBep.unitMargin);
       centerMG = Math.round(recoverableMargin * combinedMultiplier / 10000);
@@ -1868,8 +1883,12 @@ export default function YouTubeAnalyzer() {
 
   const selectedChannel = channels.find(ch => ch._id === selectedChannelId);
   const pplData = selectedChannel ? calculatePPLRevenue(selectedChannel.videos) : {};
-  // 최근 롱폼 평균조회수 × 인게이지먼트를 "예상 클릭수" 입력의 참고값으로 제공 (실제 값은 사용자가 직접 입력/보정)
-  const suggestedClicks = Math.round((pplData.avgViews || 0) * (parseFloat(pplData.engagement || 0) / 100));
+  // 최근 롱폼 평균조회수 × 링크 클릭률(CTR) 추정치를 "예상 클릭수" 입력의 참고값으로 제공한다.
+  // (실제 값은 사용자가 직접 입력/보정 — 링크 클릭률은 인게이지먼트율과 다른 지표라 별도 근거로 계산, LINK_CTR_ASSUMPTION 참고)
+  const suggestedClicksLow = Math.round((pplData.avgViews || 0) * LINK_CTR_ASSUMPTION.low);
+  const suggestedClicksTypical = Math.round((pplData.avgViews || 0) * LINK_CTR_ASSUMPTION.typical);
+  const suggestedClicksMidHigh = Math.round((pplData.avgViews || 0) * LINK_CTR_ASSUMPTION.midHigh);
+  const suggestedClicksHigh = Math.round((pplData.avgViews || 0) * LINK_CTR_ASSUMPTION.high);
   const longformVideos = selectedChannel ? filterVideos(selectedChannel.videos, 'longform') : [];
   const midVideos = selectedChannel ? filterVideos(selectedChannel.videos, 'mid') : [];
   const shortsVideos = selectedChannel ? filterVideos(selectedChannel.videos, 'shorts') : [];
@@ -2557,7 +2576,7 @@ export default function YouTubeAnalyzer() {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="bg-slate-800/80 rounded-lg p-4"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">상품 객단가</p><p className="text-xl font-bold text-white">{settings.productPrice.toLocaleString()}원</p></div>
                         <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content="= 총 MG − 대행사(쇼크) MG 분담금. 판매 마진으로 회수해야 하는 고정비"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">우리측 MG 부담금</p></InfoTooltip><p className="text-xl font-bold text-white">{pplData.ourMGShare?.toLocaleString()}원</p></div>
-                        <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content="설정 탭에서 직접 입력 (참고: 평균조회수 × 인게이지먼트)"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">🖱️ 예상 클릭수</p></InfoTooltip><p className="text-xl font-bold text-white">{pplData.expectedClicks?.toLocaleString()}회</p></div>
+                        <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content={`설정 탭에서 직접 입력 (참고: 평균조회수 × 링크 클릭률 추정치 0.5~2%, 출처: ${LINK_CTR_ASSUMPTION.source})`}><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">🖱️ 예상 클릭수</p></InfoTooltip><p className="text-xl font-bold text-white">{pplData.expectedClicks?.toLocaleString()}회</p></div>
                         <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content="= 예상 클릭수 × 전환율"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">📦 예상 판매수량</p></InfoTooltip><p className="text-xl font-bold text-white">{pplData.estimatedQty?.toLocaleString()}개</p></div>
                         <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content="= 예상 판매수량 × 상품 객단가"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">📊 예상 매출</p></InfoTooltip><p className="text-xl font-bold text-white">{pplData.expectedRevenue?.toLocaleString()}원</p></div>
                         <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content="= 판매가 − 원가 − 배송비 − 사은품 − PG수수료 − RS비용"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">개당 기여마진</p></InfoTooltip><p className={`text-xl font-bold ${pplData.unitMargin >= 0 ? 'text-green-400' : 'text-red-400'}`}>{pplData.unitMargin?.toLocaleString()}원</p></div>
@@ -2940,12 +2959,18 @@ export default function YouTubeAnalyzer() {
                       </div>
                       <div><label className="block text-slate-300 text-sm mb-2">상품 객단가 / 판매가 (원)</label><input type="number" min="0" value={settings.productPrice} onChange={(e) => setSettings({...settings, productPrice: parseInt(e.target.value)})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
                       <div>
-                        <label className="block text-slate-300 text-sm mb-2">예상 클릭수 (회)</label>
+                        <InfoTooltip content={`= 최근 롱폼 평균조회수 × 링크 클릭률(CTR) 추정치. 인게이지먼트율(좋아요+댓글 비율)과는 다른 지표입니다 — 좋아요/댓글은 유튜브 안에서 끝나는 저마찰 행동이지만, 외부 링크 클릭은 설명란을 펼치거나 고정댓글을 찾아 눌러야 하는 고마찰 행동이라 훨씬 낮습니다. 근거: ${LINK_CTR_ASSUMPTION.source}`}>
+                          <label className="block text-slate-300 text-sm mb-2 cursor-help">예상 클릭수 (회) <span className="text-slate-500">ⓘ</span></label>
+                        </InfoTooltip>
                         <input type="number" min="0" value={settings.expectedClicks} onChange={(e) => setSettings({...settings, expectedClicks: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" />
-                        <div className="flex items-center justify-between gap-2 mt-1">
-                          <p className="text-xs text-slate-500">참고: 최근 롱폼 평균조회수 × 인게이지먼트 = {suggestedClicks.toLocaleString()}회</p>
-                          <button type="button" onClick={() => setSettings({...settings, expectedClicks: suggestedClicks})} className="text-xs text-blue-400 hover:text-blue-300 shrink-0 whitespace-nowrap">이 값 적용</button>
+                        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                          <span className="text-xs text-slate-500">참고(조회수 × 링크 CTR):</span>
+                          <button type="button" onClick={() => setSettings({...settings, expectedClicks: suggestedClicksLow})} className="text-xs px-1.5 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-300">낮게 0.5% = {suggestedClicksLow.toLocaleString()}회</button>
+                          <button type="button" onClick={() => setSettings({...settings, expectedClicks: suggestedClicksTypical})} className="text-xs px-1.5 py-0.5 rounded bg-blue-700/60 hover:bg-blue-600 text-white">평균 1% = {suggestedClicksTypical.toLocaleString()}회</button>
+                          <button type="button" onClick={() => setSettings({...settings, expectedClicks: suggestedClicksMidHigh})} className="text-xs px-1.5 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-300">1.5% = {suggestedClicksMidHigh.toLocaleString()}회</button>
+                          <button type="button" onClick={() => setSettings({...settings, expectedClicks: suggestedClicksHigh})} className="text-xs px-1.5 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-300">높게 2% = {suggestedClicksHigh.toLocaleString()}회</button>
                         </div>
+                        <p className="text-[11px] text-slate-600 mt-1">출처: {LINK_CTR_ASSUMPTION.source} · 캠페인 실적이 쌓이면 실측 클릭률로 대체하는 것을 권장합니다</p>
                       </div>
                       <div><label className="block text-slate-300 text-sm mb-2">예상 전환율 (%, 클릭 대비 구매)</label><input type="number" min="0" step="0.01" value={settings.expectedConversionRate * 100} onChange={(e) => setSettings({...settings, expectedConversionRate: parseFloat(e.target.value) / 100})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
 
@@ -3193,7 +3218,7 @@ export default function YouTubeAnalyzer() {
                               shippingCost: settings.shippingCost||3500, giftCost: settings.giftCost||0,
                               pgFeeRate: settings.pgFeeRate||0.0385, totalMG: settings.totalMG||3000000,
                               agencyMGShareRate: settings.agencyMGShareRate||0.3, rsRate: settings.rsRate||0.2,
-                              expectedClicks: settings.expectedClicks||500, conversionRate: settings.expectedConversionRate||0.03,
+                              expectedClicks: settings.expectedClicks||500, conversionRate: settings.expectedConversionRate||0.015,
                             })} className="text-xs text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 py-2 rounded transition">
                               ↺ 설정값으로 초기화
                             </button>
@@ -3956,13 +3981,17 @@ export default function YouTubeAnalyzer() {
                       { label:'총 MG (최소보장금)', example:'예: 3,000,000원' },
                       { label:'대행사 MG 분담율', example:'예: 30% (쇼크 부담)' },
                       { label:'RS율 (매출 배분)', example:'예: 20%' },
-                      { label:'예상 클릭수', example:'조회수 × 인게이지먼트 참고' },
+                      { label:'예상 클릭수', example:'조회수 × 링크 클릭률(CTR) 추정치 참고' },
+                      { label:'예상 전환율', example:'기본값 1.5% (클릭 대비 구매 비율)' },
                     ].map(item => (
                       <div key={item.label} className="bg-slate-700/60 rounded p-2">
                         <p className="text-white text-xs font-semibold">{item.label}</p>
                         <p className="text-slate-400 text-xs">{item.example}</p>
                       </div>
                     ))}
+                  </div>
+                  <div className="bg-yellow-900/20 border border-yellow-700/40 rounded p-3 mt-1">
+                    <p className="text-yellow-300 text-xs">🖱️ "예상 클릭수" 참고값은 인게이지먼트율(좋아요+댓글 비율)이 아니라 별도의 <span className="text-white font-semibold">링크 클릭률(CTR) 추정치</span>로 계산됩니다. 좋아요/댓글은 유튜브 안에서 끝나는 저마찰 행동이지만, 설명란/고정댓글의 외부 링크 클릭은 훨씬 마찰이 큰 행동이라 별도로 봐야 합니다. 추정 범위는 조회수 대비 낮게 0.5% / 평균 1% / 높게 2%이며, 설정 탭에서 세 값 중 하나를 바로 적용하거나 직접 입력할 수 있습니다. 출처: {LINK_CTR_ASSUMPTION.source}. 정식 공개 리포트가 아닌 참고용 근사치이므로, 캠페인 실적(캠페인 실적 기록 기능)이 쌓이면 실측 클릭률로 대체하는 것을 권장합니다.</p>
                   </div>
                 </div>
               </section>
