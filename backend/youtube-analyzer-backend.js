@@ -76,9 +76,12 @@ const generalLimiter = rateLimit({
 app.use('/api/', generalLimiter);
 
 // 채널 검색(발굴)은 호출 1회당 유튜브 API 쿼터를 100~150 유닛가량 소모하므로 더 엄격하게 제한한다.
+// 단, "품목별 채널 추천" 기능은 품목의 카테고리+매칭 키워드(최대 4개)로 이 API를 한 번의 클릭에
+// 여러 번(최대 4회) 호출하므로, 기존 10회/10분 제한으로는 팀원 몇 명이 같은 사무실 IP를 공유할 때
+// 정상 사용 중에도 429가 자주 발생했다. 유튜브 기본 일일 쿼터(10,000 유닛)를 감안해 40회/10분으로 완화.
 const searchLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10분
-  max: 10,                  // IP당 10분에 10회
+  max: 40,                  // IP당 10분에 40회
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: '검색 요청이 너무 많습니다. 잠시 후 다시 시도해주세요 (유튜브 API 쿼터 보호).' }
@@ -501,7 +504,14 @@ function applyChannelRefresh(channel, channelInfo, videos) {
       riskLevel: pplData.riskLevel
     });
   } else {
+    // 같은 날 두 번째 이상 갱신(자동 갱신 후 수동 갱신 등)일 때도 그날의 통계가 최신 값을 반영하도록
+    // subscribers만이 아니라 engagement/avgViews/predictedRevenue/riskLevel도 함께 갱신한다.
+    // (예전엔 subscribers만 갱신해서, 하루에 두 번 갱신하면 나머지 지표가 그날 첫 갱신 시점 값으로 굳어있었음)
     todayStats.subscribers = channelInfo.subscribers;
+    todayStats.engagement = parseFloat(pplData.engagement);
+    todayStats.avgViews = pplData.avgViews;
+    todayStats.predictedRevenue = pplData.expectedRevenue;
+    todayStats.riskLevel = pplData.riskLevel;
   }
 
   channel.history.push({
