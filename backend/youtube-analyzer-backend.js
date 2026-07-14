@@ -110,13 +110,29 @@ const channelSchema = new mongoose.Schema({
     expectedClicks: { type: Number, default: 0 },       // 예상 클릭수 (영상→구매페이지 유입 예상치)
     expectedConversionRate: { type: Number, default: 0.015 },
 
-    // 품목/손익 관련 (BEP 계산용)
+    // 품목/손익 관련 (BEP 계산용) — 단일 품목일 때의 "현재 적용값". 세트상품 등 여러 품목을
+    // 함께 PPL하는 경우 아래 itemMix가 채워지고, 이 flat 필드들은 itemMix를 비중(ratio) 가중평균해서
+    // 프론트에서 계산한 "가상의 단일 품목" 값으로 채워진다 — 그래서 BEP/손익 계산 로직 자체는
+    // 품목이 1개든 여러 개든 항상 이 flat 필드만 보고 그대로 동작한다(계산 엔진 변경 없음).
     itemId: { type: mongoose.Schema.Types.ObjectId, ref: 'Item', default: null },
     itemName: { type: String, default: '' },
     cost: { type: Number, default: 0 },            // 원가
     shippingCost: { type: Number, default: 0 },     // 배송비
     giftCost: { type: Number, default: 0 },         // 사은품 비용
     pgFeeRate: { type: Number, default: 0.0385 },    // PG(결제) 수수료율
+
+    // 품목 믹스 — 세트상품이거나 한 캠페인에서 2개 이상 품목을 함께 PPL하는 경우, 각 품목의
+    // 예상 판매 비중(ratio, %)을 입력해두면 위 flat 필드들이 비중 가중평균으로 자동 계산된다.
+    // 단일 품목인 경우에도 항상 이 배열에 1개 항목(ratio 100)이 들어있는 형태로 통일해서 관리한다.
+    itemMix: [{
+      itemId: { type: mongoose.Schema.Types.ObjectId, ref: 'Item', default: null },
+      itemName: { type: String, default: '' },
+      ratio: { type: Number, default: 100 },        // 예상 판매 비중 (%, 여러 품목 합이 100이 아니어도 정규화해서 계산)
+      sellPrice: { type: Number, default: 0 },
+      cost: { type: Number, default: 0 },
+      shippingCost: { type: Number, default: 0 },
+      giftCost: { type: Number, default: 0 }
+    }],
 
     // MG / RS 딜 구조
     totalMG: { type: Number, default: 0 },           // 총 MG(최소보장금) 비용
@@ -390,6 +406,22 @@ function toNonNegativeNumber(value, fallback = 0) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) return fallback;
   return n;
+}
+
+// 품목 믹스(세트상품 등 여러 품목을 함께 PPL하는 경우) 입력값 검증.
+// 배열 길이를 과도하게 크게 보내는 어뷰징을 막기 위해 최대 10개로 제한하고,
+// 각 항목의 숫자 필드는 toNonNegativeNumber로, itemId는 유효한 ObjectId 형식이 아니면 null로 정리한다.
+function sanitizeItemMix(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.slice(0, 10).map(m => ({
+    itemId: (m && m.itemId && mongoose.Types.ObjectId.isValid(m.itemId)) ? m.itemId : null,
+    itemName: (m && typeof m.itemName === 'string') ? m.itemName.trim().slice(0, 100) : '',
+    ratio: Math.max(0, Math.min(100, toNonNegativeNumber(m && m.ratio, 0))),
+    sellPrice: toNonNegativeNumber(m && m.sellPrice, 0),
+    cost: toNonNegativeNumber(m && m.cost, 0),
+    shippingCost: toNonNegativeNumber(m && m.shippingCost, 0),
+    giftCost: toNonNegativeNumber(m && m.giftCost, 0)
+  }));
 }
 
 // 시청자 연령대/성별 비율처럼 "값이 없을 수도 있는" 0~100% 입력값 검증.
@@ -988,6 +1020,7 @@ app.post('/api/channels/:id/settings', requireAuth, requireChannelOwner, async (
       shippingCost: toNonNegativeNumber(req.body.shippingCost, 0),
       giftCost: toNonNegativeNumber(req.body.giftCost, 0),
       pgFeeRate: toNonNegativeNumber(req.body.pgFeeRate, 0.0385),
+      itemMix: sanitizeItemMix(req.body.itemMix),
 
       totalMG: toNonNegativeNumber(req.body.totalMG, 0),
       agencyMGShareRate: toNonNegativeNumber(req.body.agencyMGShareRate, 0.3),

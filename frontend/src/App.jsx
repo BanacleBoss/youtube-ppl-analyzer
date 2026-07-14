@@ -157,6 +157,26 @@ export const filterVideos = (videos, type) => {
   });
 };
 
+// 품목 믹스(세트상품이거나 한 캠페인에서 2개 이상 품목을 함께 PPL하는 경우) 계산 헬퍼.
+// 각 품목의 예상 판매 비중(ratio)으로 가중평균한 "가상의 단일 품목" 판매가/원가/배송비/사은품비용을
+// 만들어서 반환한다. 이렇게 하면 calculateBEP/calculatePPLRevenueFor 등 기존 계산 로직은 전혀 건드리지
+// 않고 그대로 재사용할 수 있다 — 품목이 1개든 여러 개든 이 블렌드 결과만 넣어주면 동일하게 동작한다.
+// 비중 합이 100이 아니어도(입력 실수 등) 각 품목의 비중을 합계 대비 정규화해서 계산하므로 항상 안전하다.
+export const blendItemMix = (itemMix) => {
+  const mix = (itemMix || []).filter(m => (Number(m.ratio) || 0) > 0);
+  const totalRatio = mix.reduce((s, m) => s + (Number(m.ratio) || 0), 0);
+  if (mix.length === 0 || totalRatio <= 0) {
+    return { productPrice: 0, cost: 0, shippingCost: 0, giftCost: 0 };
+  }
+  const weighted = (key) => mix.reduce((s, m) => s + ((Number(m.ratio) || 0) / totalRatio) * (Number(m[key]) || 0), 0);
+  return {
+    productPrice: Math.round(weighted('sellPrice')),
+    cost: Math.round(weighted('cost')),
+    shippingCost: Math.round(weighted('shippingCost')),
+    giftCost: Math.round(weighted('giftCost')),
+  };
+};
+
 export const calculateBEP = (s) => {
   const sellPrice = Number(s.productPrice) || 0;
   const cost = Number(s.cost) || 0;
@@ -518,7 +538,8 @@ export default function YouTubeAnalyzer() {
   const [settings, setSettings] = useState({
     productPrice: 50000, expectedClicks: 0, expectedConversionRate: 0.015,
     itemId: '', itemName: '', cost: 0, shippingCost: 0, giftCost: 0, pgFeeRate: 0.0385,
-    totalMG: 0, agencyMGShareRate: 0.3, rsRate: 0.2
+    totalMG: 0, agencyMGShareRate: 0.3, rsRate: 0.2,
+    itemMix: [{ itemId: '', itemName: '', ratio: 100, sellPrice: 50000, cost: 0, shippingCost: 0, giftCost: 0 }]
   });
   const [sortConfig, setSortConfig] = useState({ key: 'uploadDate', direction: 'desc' });
   const [analyzingComments, setAnalyzingComments] = useState(false);
@@ -689,6 +710,19 @@ export default function YouTubeAnalyzer() {
   useEffect(() => {
     const ch = channels.find(c => c._id === selectedChannelId);
     if (ch?.pplSettings) {
+      // itemMix가 없는(마이그레이션 전) 채널은 기존 flat 필드(단일 품목)를 비중 100%짜리 1행 믹스로
+      // 그대로 변환해서 보여준다 — 별도 DB 마이그레이션 스크립트 없이도 항상 믹스 UI로 통일해서 다룰 수 있다.
+      const migratedMix = (ch.pplSettings.itemMix && ch.pplSettings.itemMix.length > 0)
+        ? ch.pplSettings.itemMix
+        : [{
+            itemId: ch.pplSettings.itemId ?? '',
+            itemName: ch.pplSettings.itemName ?? '',
+            ratio: 100,
+            sellPrice: ch.pplSettings.productPrice ?? 50000,
+            cost: ch.pplSettings.cost ?? 0,
+            shippingCost: ch.pplSettings.shippingCost ?? 0,
+            giftCost: ch.pplSettings.giftCost ?? 0,
+          }];
       setSettings({
         productPrice: ch.pplSettings.productPrice ?? 50000,
         expectedClicks: ch.pplSettings.expectedClicks ?? 0,
@@ -702,6 +736,7 @@ export default function YouTubeAnalyzer() {
         totalMG: ch.pplSettings.totalMG ?? 0,
         agencyMGShareRate: ch.pplSettings.agencyMGShareRate ?? 0.3,
         rsRate: ch.pplSettings.rsRate ?? 0.2,
+        itemMix: migratedMix,
       });
     } else if (ch) {
       // pplSettings가 없는(비정상/legacy) 채널로 전환한 경우 이전 채널의 설정값이 그대로 남아있으면
@@ -710,6 +745,7 @@ export default function YouTubeAnalyzer() {
         productPrice: 50000, expectedClicks: 0, expectedConversionRate: 0.015,
         itemId: '', itemName: '', cost: 0, shippingCost: 0, giftCost: 0,
         pgFeeRate: 0.0385, totalMG: 0, agencyMGShareRate: 0.3, rsRate: 0.2,
+        itemMix: [{ itemId: '', itemName: '', ratio: 100, sellPrice: 50000, cost: 0, shippingCost: 0, giftCost: 0 }],
       });
     }
     // 채널 메타 폼 초기화
@@ -991,22 +1027,56 @@ export default function YouTubeAnalyzer() {
     }
   };
 
-  // 품목 선택 시 판매가/원가/배송비/사은품비용 자동 반영
-  const handleSelectItem = (itemId) => {
+  // 품목 믹스(세트상품 등 여러 품목을 함께 PPL하는 경우) 변경 시 공통으로 거치는 지점.
+  // itemMix가 바뀔 때마다 비중 가중평균(blendItemMix)으로 productPrice/cost/shippingCost/giftCost를
+  // 다시 계산해서 같이 저장한다 — 이 flat 필드들을 그대로 쓰는 calculateBEP 등 기존 계산 로직은
+  // 손댈 필요가 없다(품목이 1개든 여러 개든 항상 이 블렌드 결과만 보고 동작).
+  const applyMixChange = (nextMix) => {
+    const blended = blendItemMix(nextMix);
+    setSettings(prev => ({
+      ...prev,
+      itemMix: nextMix,
+      ...blended,
+      // 단일 품목(믹스 1행)일 때는 기존 itemId/itemName도 그대로 맞춰줘서 이전 방식과 100% 호환되게 한다.
+      itemId: nextMix.length === 1 ? (nextMix[0].itemId || '') : '',
+      itemName: nextMix.length === 1 ? (nextMix[0].itemName || '') : '',
+    }));
+  };
+
+  // "+ 품목 추가" — 기존 행들의 비중 합만큼을 뺀 나머지를 새 행의 기본 비중으로 채워준다.
+  // (예: 첫 품목 100% 상태에서 두번째 품목을 추가하면 남은 비중이 0%라서 사용자가 직접 비중을
+  // 나눠 입력해야 한다는 게 바로 눈에 보인다 — 기존 행의 비중을 임의로 재조정하지 않아 예측 가능함)
+  const handleAddMixItem = (itemId) => {
     const item = items.find(it => it._id === itemId);
-    if (!item) {
-      setSettings({ ...settings, itemId: '', itemName: '' });
-      return;
-    }
-    setSettings({
-      ...settings,
-      itemId: item._id,
-      itemName: item.name,
-      productPrice: item.sellPrice ?? settings.productPrice,
-      cost: item.cost ?? 0,
-      shippingCost: item.shippingCost ?? 0,
-      giftCost: item.giftCost ?? 0
+    const existing = settings.itemMix || [];
+    const usedRatio = existing.reduce((s, m) => s + (Number(m.ratio) || 0), 0);
+    const remaining = Math.max(0, 100 - usedRatio);
+    const newRow = item
+      ? { itemId: item._id, itemName: item.name, ratio: remaining, sellPrice: item.sellPrice ?? 0, cost: item.cost ?? 0, shippingCost: item.shippingCost ?? 0, giftCost: item.giftCost ?? 0 }
+      : { itemId: '', itemName: '', ratio: remaining, sellPrice: 0, cost: 0, shippingCost: 0, giftCost: 0 };
+    applyMixChange([...existing, newRow]);
+  };
+
+  const handleUpdateMixItem = (index, field, value) => {
+    const nextMix = (settings.itemMix || []).map((m, i) => i === index ? { ...m, [field]: value } : m);
+    applyMixChange(nextMix);
+  };
+
+  // 믹스에서 품목을 다른 걸로 바꾸면(드롭다운 재선택) 그 행의 판매가/원가/배송비/사은품비용도 새 품목 값으로 갈아끼운다.
+  const handleChangeMixItemSelection = (index, itemId) => {
+    const item = items.find(it => it._id === itemId);
+    const nextMix = (settings.itemMix || []).map((m, i) => {
+      if (i !== index) return m;
+      return item
+        ? { ...m, itemId: item._id, itemName: item.name, sellPrice: item.sellPrice ?? 0, cost: item.cost ?? 0, shippingCost: item.shippingCost ?? 0, giftCost: item.giftCost ?? 0 }
+        : { ...m, itemId: '', itemName: '' };
     });
+    applyMixChange(nextMix);
+  };
+
+  const handleRemoveMixItem = (index) => {
+    const remaining = (settings.itemMix || []).filter((_, i) => i !== index);
+    applyMixChange(remaining.length > 0 ? remaining : [{ itemId: '', itemName: '', ratio: 100, sellPrice: 0, cost: 0, shippingCost: 0, giftCost: 0 }]);
   };
 
   // MG/RS/BEP 손익 계산 (백엔드 calculatePPLProfit과 동일한 로직)
@@ -1189,6 +1259,9 @@ export default function YouTubeAnalyzer() {
       rsRate: sim.rsRate,
       expectedClicks: sim.expectedClicks,
       expectedConversionRate: sim.conversionRate,
+      // 시뮬레이터는 단일 품목 기준이므로, 품목 구성(믹스)도 이 값 기준의 단일 행 100%로 맞춰서
+      // 저장한다 — 그렇지 않으면 기존 믹스 구성이 새로 저장되는 flat 값과 어긋난 채로 남아있게 된다.
+      itemMix: [{ itemId: settings.itemId || '', itemName: settings.itemName || '', ratio: 100, sellPrice: sim.productPrice, cost: sim.cost, shippingCost: sim.shippingCost, giftCost: sim.giftCost }],
     };
     try {
       const response = await api.post(`/channels/${selectedChannel._id}/settings`, merged);
@@ -1281,7 +1354,8 @@ export default function YouTubeAnalyzer() {
   <h2 style="color:#3b82f6;font-size:15px;font-weight:700;letter-spacing:1px;margin-bottom:12px">💰 PPL 수익 분석</h2>
   <table style="width:100%;border-collapse:collapse;background:#1e293b;border-radius:8px;overflow:hidden;margin-bottom:28px">
     ${rows([
-      ['상품 객단가', `${settings.productPrice.toLocaleString()}원`],
+      ...(settings.itemMix && settings.itemMix.length > 1 ? [['품목 구성 (믹스)', settings.itemMix.map(m => `${m.itemName || '(미입력)'} ${m.ratio}%`).join(' · ')]] : []),
+      ['상품 객단가' + (settings.itemMix && settings.itemMix.length > 1 ? ' (믹스 가중평균)' : ''), `${settings.productPrice.toLocaleString()}원`],
       ['총 MG', `${settings.totalMG.toLocaleString()}원`],
       ['우리측 MG 부담', `${ppl.ourMGShare?.toLocaleString()}원`],
       ['예상 클릭수', `${ppl.expectedClicks?.toLocaleString()}회`],
@@ -1670,7 +1744,10 @@ export default function YouTubeAnalyzer() {
     const purchaseIntentMultiplier = (ca?.purchaseIntentRatio ?? 0) >= 0.1 ? 1.15 : 1.0;
     const combinedMultiplier = qualityMultiplier * fitMultiplier * trendMultiplier * adFatigueMultiplier * purchaseIntentMultiplier;
 
-    const hasRealItem = !!settings.itemId;
+    // 품목 믹스(2개 이상)일 때는 applyMixChange가 단일 itemId/itemName을 비워두므로(믹스 전체를 대표하는
+    // 이름이 하나가 아니라서), settings.itemId만으로는 "실제 품목 정보가 있는지"를 판단할 수 없다.
+    // 믹스 중 하나라도 등록된 품목과 연결돼 있으면 실제 마진 기반 계산을 쓰도록 itemMix도 함께 확인한다.
+    const hasRealItem = !!settings.itemId || (settings.itemMix || []).some(m => !!m.itemId);
     const dealBep = hasRealItem ? calculateBEP(settings) : null;
     let centerMG, basisText, marginWarning = '';
     if (hasRealItem) {
@@ -1679,7 +1756,10 @@ export default function YouTubeAnalyzer() {
       const conservativeQty = assumedClicks * assumedConv;
       const recoverableMargin = Math.max(0, conservativeQty * dealBep.unitMargin);
       centerMG = Math.round(recoverableMargin * combinedMultiplier / 10000);
-      basisText = `등록된 품목(${settings.itemName || '현재 품목'}) 마진 기준, 예상 판매수량 ${Math.round(conservativeQty).toLocaleString()}개에서 회수 가능한 마진을 역산한 값입니다.`;
+      const itemLabel = (settings.itemMix || []).length > 1
+        ? settings.itemMix.map(m => m.itemName || '(미입력)').join(' + ') + ' 믹스'
+        : (settings.itemName || '현재 품목');
+      basisText = `등록된 품목(${itemLabel}) 마진 기준, 예상 판매수량 ${Math.round(conservativeQty).toLocaleString()}개에서 회수 가능한 마진을 역산한 값입니다.`;
       if (dealBep.unitMargin <= 0) {
         marginWarning = ` 다만 현재 등록된 원가·판매가 기준으로는 개당 기여마진이 0원 이하라, MG를 얼마로 잡든 판매만으로는 회수가 불가능한 구조입니다. 원가나 판매가부터 재검토가 필요합니다.`;
       }
@@ -1827,6 +1907,7 @@ export default function YouTubeAnalyzer() {
       `| 인게이지먼트 | ${ppl.engagement}% |`,
       `| CPV (조회수당 비용) | ${ppl.cpv !== null ? ppl.cpv.toLocaleString()+'원' : '미입력'} |`,
       `| CPM (1,000회당) | ${ppl.cpm !== null ? ppl.cpm.toLocaleString()+'원' : '미입력'} |`,
+      ...(settings.itemMix && settings.itemMix.length > 1 ? [`| 품목 구성 (믹스) | ${settings.itemMix.map(m => `${m.itemName || '(미입력)'} ${m.ratio}%`).join(' · ')} |`] : []),
       `| 예상 클릭수 | ${ppl.expectedClicks.toLocaleString()}회 |`,
       `| 예상 판매수량 | ${ppl.estimatedQty.toLocaleString()}개 |`,
       `| 예상 매출 | ${ppl.expectedRevenue.toLocaleString()}원 |`,
@@ -2573,6 +2654,26 @@ export default function YouTubeAnalyzer() {
                     <div className="bg-gradient-to-br from-blue-900 to-blue-800 border border-blue-600 rounded-lg p-6">
                       <h3 className="text-xl font-bold text-white mb-1">💰 PPL 매출 분석</h3>
                       <p className="text-blue-200/70 text-xs mb-4">원가·MG·RS 반영 (설정 탭에서 입력) — 광고비/수수료율 대신 실제 딜 구조 기준</p>
+                      {(settings.itemMix || []).length > 1 && (() => {
+                        const totalRatio = settings.itemMix.reduce((s, m) => s + (Number(m.ratio) || 0), 0) || 1;
+                        return (
+                          <div className="bg-slate-900/50 border border-blue-700/30 rounded-lg p-3 mb-3">
+                            <p className="text-blue-200 text-xs font-semibold mb-1.5">📦 품목 구성 (믹스 가중평균 적용)</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {settings.itemMix.map((m, i) => {
+                                const normalizedRatio = (Number(m.ratio) || 0) / totalRatio * 100;
+                                const itemQty = Math.round((pplData.estimatedQty || 0) * normalizedRatio / 100);
+                                return (
+                                  <span key={i} className="text-xs px-2 py-1 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/40">
+                                    {m.itemName || '(품목명 미입력)'} {normalizedRatio.toFixed(0)}% · 예상 {itemQty.toLocaleString()}개
+                                  </span>
+                                );
+                              })}
+                            </div>
+                            <p className="text-[10px] text-slate-500 mt-1.5">아래 판매가/원가/배송비/사은품은 위 비중으로 가중평균한 값이며, 개당 항목 예상 판매수량은 총 예상 판매수량 × 비중으로 참고용 표시됩니다.</p>
+                          </div>
+                        );
+                      })()}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="bg-slate-800/80 rounded-lg p-4"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">상품 객단가</p><p className="text-xl font-bold text-white">{settings.productPrice.toLocaleString()}원</p></div>
                         <div className="bg-slate-800/80 rounded-lg p-4"><InfoTooltip content="= 총 MG − 대행사(쇼크) MG 분담금. 판매 마진으로 회수해야 하는 고정비"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">우리측 MG 부담금</p></InfoTooltip><p className="text-xl font-bold text-white">{pplData.ourMGShare?.toLocaleString()}원</p></div>
@@ -2948,16 +3049,64 @@ export default function YouTubeAnalyzer() {
                     <h3 className="text-lg font-bold text-white mb-4">⚙️ PPL 설정</h3>
                     <div className="space-y-4">
                       <div>
-                        <label className="block text-slate-300 text-sm mb-2">📦 품목 불러오기</label>
-                        <select value={settings.itemId || ''} onChange={(e) => handleSelectItem(e.target.value)} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500">
-                          <option value="">직접 입력 (품목 미선택)</option>
-                          {items.map(item => (
-                            <option key={item._id} value={item._id}>{item.name} — {(item.sellPrice || 0).toLocaleString()}원</option>
+                        <InfoTooltip content="세트상품이거나 한 캠페인에서 2개 이상 품목을 함께 PPL하는 경우(예: 더톨300 + 단잠), 각 품목의 예상 판매 비중(%)을 입력하면 비중 가중평균으로 판매가/원가/배송비/사은품비용을 계산해 손익에 반영합니다. 품목이 1개면 비중 100%로 기존과 동일하게 동작합니다.">
+                          <label className="block text-slate-300 text-sm mb-2 cursor-help">📦 품목 구성 (2개 이상 선택 시 믹스로 계산) <span className="text-slate-500">ⓘ</span></label>
+                        </InfoTooltip>
+                        <div className="space-y-2">
+                          {(settings.itemMix || []).map((mix, idx) => (
+                            <div key={idx} className="bg-slate-900/40 border border-slate-700 rounded-lg p-3">
+                              <div className="flex items-center gap-2 mb-2">
+                                <select value={mix.itemId || ''} onChange={(e) => handleChangeMixItemSelection(idx, e.target.value)} className="flex-1 min-w-0 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-blue-500">
+                                  <option value="">직접 입력{mix.itemName ? ` — ${mix.itemName}` : ''}</option>
+                                  {items.map(item => (
+                                    <option key={item._id} value={item._id}>{item.name} — {(item.sellPrice || 0).toLocaleString()}원</option>
+                                  ))}
+                                </select>
+                                {!mix.itemId && (
+                                  <input type="text" placeholder="품목명" value={mix.itemName} onChange={(e) => handleUpdateMixItem(idx, 'itemName', e.target.value)} className="w-24 shrink-0 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-blue-500" />
+                                )}
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <input type="number" min="0" max="100" value={mix.ratio} onChange={(e) => handleUpdateMixItem(idx, 'ratio', Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)))} className="w-16 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm text-right focus:outline-none focus:border-blue-500" />
+                                  <span className="text-slate-400 text-sm">%</span>
+                                </div>
+                                {(settings.itemMix || []).length > 1 && (
+                                  <button type="button" onClick={() => handleRemoveMixItem(idx)} className="shrink-0 text-red-400 hover:text-red-300 p-1"><Trash2 size={14} /></button>
+                                )}
+                              </div>
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                <div><label className="block text-slate-500 text-[11px] mb-0.5">판매가</label><input type="number" min="0" value={mix.sellPrice} onChange={(e) => handleUpdateMixItem(idx, 'sellPrice', parseInt(e.target.value) || 0)} className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-blue-500" /></div>
+                                <div><label className="block text-slate-500 text-[11px] mb-0.5">원가</label><input type="number" min="0" value={mix.cost} onChange={(e) => handleUpdateMixItem(idx, 'cost', parseInt(e.target.value) || 0)} className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-blue-500" /></div>
+                                <div><label className="block text-slate-500 text-[11px] mb-0.5">배송비</label><input type="number" min="0" value={mix.shippingCost} onChange={(e) => handleUpdateMixItem(idx, 'shippingCost', parseInt(e.target.value) || 0)} className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-blue-500" /></div>
+                                <div><label className="block text-slate-500 text-[11px] mb-0.5">사은품</label><input type="number" min="0" value={mix.giftCost} onChange={(e) => handleUpdateMixItem(idx, 'giftCost', parseInt(e.target.value) || 0)} className="w-full bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white text-xs focus:outline-none focus:border-blue-500" /></div>
+                              </div>
+                            </div>
                           ))}
-                        </select>
+                        </div>
+                        <div className="flex items-center gap-2 mt-2">
+                          <select value="" onChange={(e) => { if (e.target.value) handleAddMixItem(e.target.value); }} className="flex-1 bg-slate-700 border border-slate-600 rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-blue-500">
+                            <option value="">+ 등록된 품목에서 추가...</option>
+                            {items.map(item => (
+                              <option key={item._id} value={item._id}>{item.name} — {(item.sellPrice || 0).toLocaleString()}원</option>
+                            ))}
+                          </select>
+                          <button type="button" onClick={() => handleAddMixItem('')} className="shrink-0 text-xs px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 whitespace-nowrap">+ 직접 입력 추가</button>
+                        </div>
                         {items.length === 0 && <p className="text-xs text-slate-500 mt-1">등록된 품목이 없습니다. 상단 "📦 품목관리"에서 먼저 등록하세요.</p>}
+                        {(() => {
+                          const totalRatio = (settings.itemMix || []).reduce((s, m) => s + (Number(m.ratio) || 0), 0);
+                          const isMix = (settings.itemMix || []).length > 1;
+                          return (
+                            <div className="mt-2 space-y-1">
+                              <p className={`text-xs ${totalRatio === 100 ? 'text-emerald-400' : 'text-yellow-400'}`}>
+                                합계 비중 {totalRatio}%{totalRatio !== 100 && ' — 100%가 아니어도 비율대로 정규화해서 계산되지만, 정확한 표기를 위해 100%로 맞추는 걸 권장합니다'}
+                              </p>
+                              {isMix && (
+                                <p className="text-xs text-slate-400">→ 믹스 가중평균 적용 결과: 판매가 {settings.productPrice.toLocaleString()}원 · 원가 {settings.cost.toLocaleString()}원 · 배송비 {settings.shippingCost.toLocaleString()}원 · 사은품 {settings.giftCost.toLocaleString()}원 (아래 손익 계산은 전부 이 값 기준)</p>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
-                      <div><label className="block text-slate-300 text-sm mb-2">상품 객단가 / 판매가 (원)</label><input type="number" min="0" value={settings.productPrice} onChange={(e) => setSettings({...settings, productPrice: parseInt(e.target.value)})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
                       <div>
                         <InfoTooltip content={`= 최근 롱폼 평균조회수 × 링크 클릭률(CTR) 추정치. 인게이지먼트율(좋아요+댓글 비율)과는 다른 지표입니다 — 좋아요/댓글은 유튜브 안에서 끝나는 저마찰 행동이지만, 외부 링크 클릭은 설명란을 펼치거나 고정댓글을 찾아 눌러야 하는 고마찰 행동이라 훨씬 낮습니다. 근거: ${LINK_CTR_ASSUMPTION.source}`}>
                           <label className="block text-slate-300 text-sm mb-2 cursor-help">예상 클릭수 (회) <span className="text-slate-500">ⓘ</span></label>
@@ -2975,13 +3124,9 @@ export default function YouTubeAnalyzer() {
                       <div><label className="block text-slate-300 text-sm mb-2">예상 전환율 (%, 클릭 대비 구매)</label><input type="number" min="0" step="0.01" value={settings.expectedConversionRate * 100} onChange={(e) => setSettings({...settings, expectedConversionRate: parseFloat(e.target.value) / 100})} className="w-full bg-slate-700 border border-slate-600 rounded px-4 py-2 text-white focus:outline-none focus:border-blue-500" /></div>
 
                       <div className="border-t border-slate-700 pt-4 mt-2">
-                        <h4 className="text-slate-200 font-semibold mb-3">💰 손익/BEP 계산용 원가 정보</h4>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                          <div><label className="block text-slate-300 text-xs mb-1">원가 (원)</label><input type="number" min="0" value={settings.cost} onChange={(e) => setSettings({...settings, cost: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
-                          <div><label className="block text-slate-300 text-xs mb-1">배송비 (원)</label><input type="number" min="0" value={settings.shippingCost} onChange={(e) => setSettings({...settings, shippingCost: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
-                          <div><label className="block text-slate-300 text-xs mb-1">사은품 비용 (원)</label><input type="number" min="0" value={settings.giftCost} onChange={(e) => setSettings({...settings, giftCost: parseInt(e.target.value) || 0})} className="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" /></div>
-                        </div>
-                        <div className="mt-3">
+                        <h4 className="text-slate-200 font-semibold mb-3">💰 손익/BEP 계산용 정보</h4>
+                        <p className="text-xs text-slate-500 mb-3">판매가/원가/배송비/사은품비용은 위 "품목 구성"에서 입력·계산됩니다.</p>
+                        <div>
                           <label className="block text-slate-300 text-xs mb-1">PG(결제) 수수료율 (%)</label>
                           <input type="number" min="0" step="0.01" value={settings.pgFeeRate * 100} onChange={(e) => setSettings({...settings, pgFeeRate: parseFloat(e.target.value) / 100 || 0})} className="w-full md:w-1/3 bg-slate-700 border border-slate-600 rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
                         </div>
@@ -3303,7 +3448,11 @@ export default function YouTubeAnalyzer() {
                   return (
                     <div className="bg-slate-800 border border-slate-700 rounded-lg p-6">
                       <h3 className="text-lg font-bold text-white mb-1">💰 손익 / BEP 분석</h3>
-                      <p className="text-slate-400 text-sm mb-4">{settings.itemName ? `품목: ${settings.itemName}` : '품목 미선택 — 설정 탭에서 원가 정보를 입력하세요'}</p>
+                      <p className="text-slate-400 text-sm mb-4">
+                        {(settings.itemMix || []).length > 1
+                          ? `품목: ${settings.itemMix.map(m => m.itemName || '(미입력)').join(' + ')} (믹스)`
+                          : (settings.itemName ? `품목: ${settings.itemName}` : '품목 미선택 — 설정 탭에서 원가 정보를 입력하세요')}
+                      </p>
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
                         <div className="bg-slate-800/80 rounded-lg p-4">
@@ -3976,8 +4125,7 @@ export default function YouTubeAnalyzer() {
                   <p className="text-slate-300">⚙️ 설정 탭에서 아래 항목을 입력하면 자동 계산됩니다.</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
                     {[
-                      { label:'상품 판매가', example:'예: 89,000원' },
-                      { label:'원가 / 배송비 / 사은품', example:'예: 30,000 / 3,500 / 2,000원' },
+                      { label:'품목 구성 (판매가/원가/배송비/사은품)', example:'예: 89,000 / 30,000 / 3,500 / 2,000원 — 아래 "품목 믹스" 참고' },
                       { label:'총 MG (최소보장금)', example:'예: 3,000,000원' },
                       { label:'대행사 MG 분담율', example:'예: 30% (쇼크 부담)' },
                       { label:'RS율 (매출 배분)', example:'예: 20%' },
@@ -3992,6 +4140,23 @@ export default function YouTubeAnalyzer() {
                   </div>
                   <div className="bg-yellow-900/20 border border-yellow-700/40 rounded p-3 mt-1">
                     <p className="text-yellow-300 text-xs">🖱️ "예상 클릭수" 참고값은 인게이지먼트율(좋아요+댓글 비율)이 아니라 별도의 <span className="text-white font-semibold">링크 클릭률(CTR) 추정치</span>로 계산됩니다. 좋아요/댓글은 유튜브 안에서 끝나는 저마찰 행동이지만, 설명란/고정댓글의 외부 링크 클릭은 훨씬 마찰이 큰 행동이라 별도로 봐야 합니다. 추정 범위는 조회수 대비 낮게 0.5% / 평균 1% / 높게 2%이며, 설정 탭에서 세 값 중 하나를 바로 적용하거나 직접 입력할 수 있습니다. 출처: {LINK_CTR_ASSUMPTION.source}. 정식 공개 리포트가 아닌 참고용 근사치이므로, 캠페인 실적(캠페인 실적 기록 기능)이 쌓이면 실측 클릭률로 대체하는 것을 권장합니다.</p>
+                  </div>
+                </div>
+              </section>
+
+              {/* 품목 믹스 */}
+              <section>
+                <h3 className="text-teal-400 font-bold text-base mb-3">📦 세트상품·여러 품목 PPL(믹스)은 어떻게 계산하나요?</h3>
+                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700 space-y-3">
+                  <p className="text-slate-300">한 캠페인에서 <span className="text-white font-semibold">2개 이상의 품목을 함께 PPL</span>하는 경우(예: 더톨300 + 단잠 세트, 혹은 한 영상에서 두 제품을 같이 소개)가 있어서, 설정 탭의 "📦 품목 구성"에서 품목을 여러 개 추가하고 각각의 <span className="text-white font-semibold">예상 판매 비중(%)</span>을 입력할 수 있습니다.</p>
+                  <div className="bg-slate-700/60 rounded p-3 space-y-1.5">
+                    <p className="text-white text-xs font-semibold">계산 방식: 비중 가중평균</p>
+                    <p className="text-slate-400 text-xs">예를 들어 더톨300(판매가 89,000원)이 비중 60%, 단잠(판매가 59,000원)이 비중 40%라면, 판매가는 89,000×0.6 + 59,000×0.4 = 77,000원으로 계산됩니다. 원가·배송비·사은품비용도 같은 방식으로 가중평균되고, 이렇게 만들어진 "가상의 단일 품목" 값을 기존 BEP·순이익·ROI 계산에 그대로 사용합니다 — 계산 로직 자체는 품목이 몇 개든 동일합니다.</p>
+                  </div>
+                  <div className="bg-yellow-900/20 border border-yellow-700/40 rounded p-3 space-y-1.5">
+                    <p className="text-yellow-300 text-xs">비중 합계가 100%가 아니어도(예: 60% + 30% = 90%) 각 품목 비중을 합계 대비 정규화해서 계산하므로 계산 자체는 항상 정상 동작합니다. 다만 표기 정확성을 위해 100%로 맞추는 걸 권장하며, 설정 탭에 합계 비중이 실시간으로 표시됩니다.</p>
+                    <p className="text-yellow-300 text-xs">품목이 1개뿐이면 비중 100%인 단일 행으로 기존과 완전히 동일하게 동작합니다. 기존에 등록해둔 채널(믹스 기능 이전)도 별도 작업 없이 자동으로 "1개 품목·비중 100%"로 변환되어 보입니다.</p>
+                    <p className="text-yellow-300 text-xs">요약 탭의 "💰 PPL 매출 분석"과 리포트에는 품목 구성(품목명·비중·항목별 예상 판매수량)이 근거로 함께 표시됩니다.</p>
                   </div>
                 </div>
               </section>

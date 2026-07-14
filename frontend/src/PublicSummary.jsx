@@ -124,6 +124,16 @@ export default function PublicSummary({ token }) {
           {isInternal && ppl && (
             <div className="bg-gradient-to-br from-blue-900 to-blue-800 border border-blue-600 rounded-lg p-6 mb-6">
               <h2 className="text-xl font-bold text-white mb-4">💰 PPL 매출 분석</h2>
+              {data.pplSettings.itemMix && data.pplSettings.itemMix.length > 1 && (
+                <div className="bg-slate-900/50 border border-blue-700/30 rounded-lg p-3 mb-3">
+                  <p className="text-blue-200 text-xs font-semibold mb-1.5">📦 품목 구성 (믹스 가중평균 적용)</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {data.pplSettings.itemMix.map((m, i) => (
+                      <span key={i} className="text-xs px-2 py-1 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/40">{m.itemName || '(품목명 미입력)'} {m.ratio}%</span>
+                    ))}
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div className="bg-slate-800/80 rounded-lg p-4"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">우리측 MG 부담금</p><p className="text-xl font-bold text-white">{ppl.ourMGShare?.toLocaleString()}원</p></div>
                 <div className="bg-slate-800/80 rounded-lg p-4"><p className="text-slate-400 text-xs uppercase tracking-wide mb-1">예상 판매수량</p><p className="text-xl font-bold text-white">{ppl.estimatedQty?.toLocaleString()}개</p></div>
